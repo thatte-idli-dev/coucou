@@ -348,5 +348,5 @@ struct E2ETest {
 SWIFT_EOF
 
 echo "→ Running E2E signaling test"
-ACCESS_CODE="$ACCESS_CODE" swiftc -o "$TEMP_DIR/e2e_test" "$TEMP_DIR/e2e_test.swift"
+ACCESS_CODE="$ACCESS_CODE" swiftc -parse-as-library -o "$TEMP_DIR/e2e_test" "$TEMP_DIR/e2e_test.swift"
 "$TEMP_DIR/e2e_test"
