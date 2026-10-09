@@ -425,9 +425,9 @@ SWIFT_EOF
 
 echo "→ Running E2E signaling test"
 cd "$TEMP_DIR"
-ACCESS_CODE="$ACCESS_CODE" swiftc \
+swiftc \
     -o e2e_test \
     "$SCRIPT_DIR/../NotchBuddy/Sources/App/WalkieProtocol.swift" \
     e2e_test.swift
 
-./e2e_test
+ACCESS_CODE="$ACCESS_CODE" ./e2e_test
