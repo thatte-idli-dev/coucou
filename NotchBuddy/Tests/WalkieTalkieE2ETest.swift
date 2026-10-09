@@ -6,16 +6,19 @@ import FoundationNetworking
 @main
 struct WalkieTalkieE2ETest {
     static func main() async {
-        guard CommandLine.arguments.count > 1 else {
-            print("❌ Usage: walkie-e2e-test <server-url>")
+        guard CommandLine.arguments.count > 3 else {
+            print("❌ Usage: walkie-e2e-test <server-url> <access-code-a> <access-code-b>")
             exit(1)
         }
         
         let serverURL = CommandLine.arguments[1]
+        let accessCodeA = CommandLine.arguments[2]
+        let accessCodeB = CommandLine.arguments[3]
+        
         print("🔗 Testing against server: \(serverURL)")
         
         do {
-            try await runAllTests(serverURL: serverURL)
+            try await runAllTests(serverURL: serverURL, accessCodeA: accessCodeA, accessCodeB: accessCodeB)
             print("\n✅ All E2E tests passed!")
             exit(0)
         } catch {
@@ -24,28 +27,28 @@ struct WalkieTalkieE2ETest {
         }
     }
     
-    static func runAllTests(serverURL: String) async throws {
+    static func runAllTests(serverURL: String, accessCodeA: String, accessCodeB: String) async throws {
         // Test 1: Full call flow with signaling
-        try await testFullCallFlow(serverURL: serverURL)
+        try await testFullCallFlow(serverURL: serverURL, accessCodeA: accessCodeA, accessCodeB: accessCodeB)
         
         // Test 2: Tap to hang up
-        try await testTapToHangup(serverURL: serverURL)
+        try await testTapToHangup(serverURL: serverURL, accessCodeA: accessCodeA, accessCodeB: accessCodeB)
         
-        // Test 3: Waiting timeout
-        try await testWaitingTimeout(serverURL: serverURL)
+        // Test 3: Tap to cancel waiting
+        try await testTapToCancelWaiting(serverURL: serverURL, accessCodeA: accessCodeA)
         
-        // Test 4: TURN credentials verification
-        try await testTURNCredentials(serverURL: serverURL)
+        // Test 4: Waiting timeout
+        try await testWaitingTimeout(serverURL: serverURL, accessCodeA: accessCodeA)
+        
+        // Test 5: TURN credentials verification
+        try await testTURNCredentials(serverURL: serverURL, accessCodeA: accessCodeA)
     }
     
     // MARK: - Test 1: Full Call Flow
     
-    static func testFullCallFlow(serverURL: String) async throws {
+    static func testFullCallFlow(serverURL: String, accessCodeA: String, accessCodeB: String) async throws {
         print("\n📞 Test 1: Full call flow with bidirectional signaling")
         print("=====================================================")
-        
-        // Get two access codes
-        let (accessCodeA, accessCodeB) = try await createChannel(serverURL: serverURL)
         
         // Create two link instances with fake audio layers
         let audioA = FakeAudioLayer()
@@ -141,11 +144,9 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 2: Tap to Hang Up
     
-    static func testTapToHangup(serverURL: String) async throws {
+    static func testTapToHangup(serverURL: String, accessCodeA: String, accessCodeB: String) async throws {
         print("\n👆 Test 2: Tap to hang up")
         print("=========================")
-        
-        let (accessCodeA, accessCodeB) = try await createChannel(serverURL: serverURL)
         
         let audioA = FakeAudioLayer()
         let audioB = FakeAudioLayer()
@@ -202,11 +203,9 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 3: Tap to Cancel Waiting
     
-    static func testTapToCancelWaiting(serverURL: String) async throws {
+    static func testTapToCancelWaiting(serverURL: String, accessCodeA: String) async throws {
         print("\n🚫 Test 3: Tap to cancel waiting")
         print("=================================")
-        
-        let (accessCodeA, _) = try await createChannel(serverURL: serverURL)
         
         let audioA = FakeAudioLayer()
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
@@ -242,11 +241,9 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 4: Waiting Timeout
     
-    static func testWaitingTimeout(serverURL: String) async throws {
+    static func testWaitingTimeout(serverURL: String, accessCodeA: String) async throws {
         print("\n⏱️  Test 4: Waiting timeout (30s)")
         print("=================================")
-        
-        let (accessCodeA, _) = try await createChannel(serverURL: serverURL)
         
         let audioA = FakeAudioLayer()
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
@@ -291,11 +288,9 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 5: TURN Credentials
     
-    static func testTURNCredentials(serverURL: String) async throws {
+    static func testTURNCredentials(serverURL: String, accessCodeA: String) async throws {
         print("\n🔐 Test 5: TURN credentials verification")
         print("==========================================")
-        
-        let (accessCodeA, _) = try await createChannel(serverURL: serverURL)
         
         let audioA = FakeAudioLayer()
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
@@ -361,30 +356,6 @@ struct WalkieTalkieE2ETest {
         print("✅ Test 5 passed: TURN credentials properly structured")
     }
     
-    // MARK: - Helpers
-    
-    static func createChannel(serverURL: String) async throws -> (String, String) {
-        let url = URL(string: "\(serverURL)/v3/channels")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = "{}".data(using: .utf8)
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              httpResponse.statusCode == 200 else {
-            throw TestError("Failed to create channel")
-        }
-        
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let accessCodeA = json["access_code_a"] as? String,
-              let accessCodeB = json["access_code_b"] as? String else {
-            throw TestError("Invalid channel response")
-        }
-        
-        return (accessCodeA, accessCodeB)
-    }
 }
 
 // MARK: - Test Wrapper
