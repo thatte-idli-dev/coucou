@@ -67,10 +67,10 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         webView?.evaluateJavaScript("setMicEnabled(\(enabled))") { _, _ in }
     }
     
-    func setOffer(_ offer: String, iceServers: [String]) async throws -> String {
+    func setOffer(_ offer: String, iceServers: [[String: String]]) async throws -> String {
         guard let wv = webView else { throw WalkieError.notInitialized }
         
-        let iceJSON = try! JSONSerialization.data(withJSONObject: iceServers.map { ["urls": $0] })
+        let iceJSON = try! JSONSerialization.data(withJSONObject: iceServers)
         let iceStr = String(data: iceJSON, encoding: .utf8)!
         let offerEscaped = offer.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
         
@@ -87,10 +87,10 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         }
     }
     
-    func createOffer(iceServers: [String]) async throws -> String {
+    func createOffer(iceServers: [[String: String]]) async throws -> String {
         guard let wv = webView else { throw WalkieError.notInitialized }
         
-        let iceJSON = try! JSONSerialization.data(withJSONObject: iceServers.map { ["urls": $0] })
+        let iceJSON = try! JSONSerialization.data(withJSONObject: iceServers)
         let iceStr = String(data: iceJSON, encoding: .utf8)!
         
         return try await withCheckedThrowingContinuation { continuation in

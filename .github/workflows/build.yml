@@ -78,6 +78,9 @@ jobs:
       - name: Walkie-talkie state tests
         run: bash scripts/test-walkie-talkie-state.sh
 
+      - name: Walkie-talkie protocol tests
+        run: bash scripts/test-walkie-talkie-protocol.sh
+
       - name: Build
         run: |
           xcodebuild \

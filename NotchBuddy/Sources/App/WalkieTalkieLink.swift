@@ -18,6 +18,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     private var state: WalkieState = .disconnected
     private var sessionID: String?
+    private var sessionToken: String?
     private var revision: Int = 0
     private var negotiationID: String?
     private var isSeatA: Bool = false
@@ -28,12 +29,13 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var waitingTimer: Task<Void, Never>?
     private var iceRefreshTimer: Task<Void, Never>?
     
-    private var iceServers: [String] = []
+    private var iceServers: [[String: String]] = []
     private var serverURL: String?
     private var accessCode: String?
     private var channelFull: Bool = false
     
     private var waitingAnimationToken: NSObject?
+    private var currentSSEEvent: String?
     
     private init() {
         NotificationCenter.default.addObserver(
@@ -96,13 +98,16 @@ final class WalkieTalkieLink: @unchecked Sendable {
         guard let serverURL, let accessCode else { return }
         
         let baseURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let urlStr = "\(baseURL)/v3/channels/1/events?access_code=\(accessCode)"
+        let urlStr = "\(baseURL)/v3/channels/1/events"
         guard let url = URL(string: urlStr) else { return }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessCode)", forHTTPHeaderField: "Authorization")
         
         eventTask = Task {
             while !Task.isCancelled {
                 do {
-                    let (bytes, response) = try await URLSession.shared.bytes(from: url)
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     
                     if let httpResp = response as? HTTPURLResponse {
                         if httpResp.statusCode == 409 {
@@ -129,43 +134,45 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func handleSSELine(_ line: String) async {
-        if line.hasPrefix("data: ") {
+        if line.hasPrefix("event: ") {
+            currentSSEEvent = String(line.dropFirst(7))
+        } else if line.hasPrefix("data: ") {
             let json = String(line.dropFirst(6))
             guard let data = json.data(using: .utf8),
                   let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
             
-            if let eventType = dict["type"] as? String {
-                switch eventType {
-                case "snapshot":
-                    if let sid = dict["session_id"] as? String {
+            guard let eventType = currentSSEEvent else { return }
+            
+            switch eventType {
+            case "join":
+                if let token = dict["session_token"] as? String {
+                    sessionToken = token
+                }
+                if let event = dict["event"] as? [String: Any] {
+                    if let sid = event["session_id"] as? String {
                         sessionID = sid
-                        revision = (dict["revision"] as? Int) ?? 0
-                        isSeatA = (dict["seat"] as? String) == "A"
                     }
-                    if let ice = dict["ice_servers"] as? [[String: Any]] {
-                        iceServers = ice.compactMap { $0["urls"] as? String }
+                    if let member = event["member"] as? String {
+                        isSeatA = member == "A"
                     }
-                    await startPresence()
-                    
-                case "state":
-                    if let rev = dict["revision"] as? Int {
-                        revision = rev
-                    }
-                    
+                    revision = 0
+                }
+                await startPresence()
+                
+            case "state":
+                if let event = dict["event"] as? [String: Any] {
                     let myTuned = isLocallyTuned()
                     
-                    if let states = dict["states"] as? [[String: Any]] {
-                        for s in states where (s["session_id"] as? String) != sessionID {
-                            peerTuned = (s["tuned"] as? Bool) ?? false
-                        }
-                    }
+                    let localTuned = (event["local"] as? [String: Any])?["tuned"] as? Bool ?? false
+                    let peerDict = event["peer"] as? [String: Any]
+                    peerTuned = peerDict?["tuned"] as? Bool ?? false
                     
                     if myTuned && peerTuned {
                         if case .waiting = state {
                             await stopWaitingAnimation()
                         }
                         
-                        if let negID = dict["negotiation_id"] as? String {
+                        if let negID = event["negotiation_id"] as? String {
                             if negotiationID != negID {
                                 negotiationID = negID
                                 await startNegotiation()
@@ -184,14 +191,16 @@ final class WalkieTalkieLink: @unchecked Sendable {
                             await stopWaitingAnimation()
                         }
                     }
-                    
-                case "signal":
-                    await handleSignalEvent(dict)
-                    
-                default:
-                    break
                 }
+                
+            case "signal":
+                await handleSignalEvent(dict)
+                
+            default:
+                break
             }
+            
+            currentSSEEvent = nil
         }
     }
     
@@ -215,7 +224,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func sendPresence() async {
-        guard let serverURL, let accessCode, let sessionID else { return }
+        guard let serverURL, let sessionToken, let sessionID else { return }
+        
+        revision += 1
         
         let tuned = isLocallyTuned()
         let transmitting: Bool
@@ -235,11 +246,12 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
         
-        let urlStr = "\(serverURL)/v3/channels/1/presence?access_code=\(accessCode)"
+        let urlStr = "\(serverURL)/v3/channels/1/presence"
         guard let url = URL(string: urlStr) else { return }
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
@@ -281,23 +293,25 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func handleSignalEvent(_ dict: [String: Any]) async {
-        guard let fromSession = dict["from_session_id"] as? String,
+        guard let fromSession = dict["from"] as? String,
               fromSession != sessionID else { return }
         
-        if let offerJSON = dict["offer"] as? String, !isSeatA {
+        guard let payload = dict["payload"] as? [String: Any] else { return }
+        
+        if let offerJSON = payload["offer"] as? String, !isSeatA {
             do {
                 let answer = try await WalkieTalkieAudio.shared.setOffer(offerJSON, iceServers: iceServers)
                 await sendAnswer(answer)
             } catch {}
         }
         
-        if let answerJSON = dict["answer"] as? String, isSeatA {
+        if let answerJSON = payload["answer"] as? String, isSeatA {
             await MainActor.run {
                 WalkieTalkieAudio.shared.handleAnswer(answerJSON)
             }
         }
         
-        if let candidateJSON = dict["ice_candidate"] as? String {
+        if let candidateJSON = payload["ice_candidate"] as? String {
             await MainActor.run {
                 WalkieTalkieAudio.shared.addIceCandidate(candidateJSON)
             }
@@ -305,33 +319,33 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func sendOffer(_ offer: String) async {
-        await sendSignal(["offer": offer])
+        await sendSignal(kind: "offer", payload: ["offer": offer])
     }
     
     private func sendAnswer(_ answer: String) async {
-        await sendSignal(["answer": answer])
+        await sendSignal(kind: "answer", payload: ["answer": answer])
     }
     
     private func sendIceCandidate(_ candidate: String) async {
-        await sendSignal(["ice_candidate": candidate])
+        await sendSignal(kind: "ice", payload: ["ice_candidate": candidate])
     }
     
-    private func sendSignal(_ payload: [String: String]) async {
-        guard let serverURL, let accessCode, let sessionID, let negotiationID else { return }
+    private func sendSignal(kind: String, payload: [String: String]) async {
+        guard let serverURL, let sessionToken, let sessionID, let negotiationID else { return }
         
-        var body: [String: Any] = [
-            "session_id": sessionID,
-            "negotiation_id": negotiationID
+        let body: [String: Any] = [
+            "kind": kind,
+            "payload": payload
         ]
-        body.merge(payload) { $1 }
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
         
-        let urlStr = "\(serverURL)/v3/channels/1/signal?access_code=\(accessCode)"
+        let urlStr = "\(serverURL)/v3/channels/1/signal"
         guard let url = URL(string: urlStr) else { return }
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
@@ -535,16 +549,29 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func refreshICE() async {
-        guard let serverURL, let accessCode else { return }
+        guard let serverURL, let sessionToken else { return }
         
-        let urlStr = "\(serverURL)/v3/channels/1/ice?access_code=\(accessCode)"
+        let urlStr = "\(serverURL)/v3/channels/1/ice"
         guard let url = URL(string: urlStr) else { return }
         
+        var req = URLRequest(url: url)
+        req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+        
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let (data, _) = try await URLSession.shared.data(for: req)
             if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let ice = dict["ice_servers"] as? [[String: Any]] {
-                iceServers = ice.compactMap { $0["urls"] as? String }
+                iceServers = ice.compactMap { server in
+                    guard let urls = server["urls"] as? String else { return nil }
+                    var result = ["urls": urls]
+                    if let username = server["username"] as? String {
+                        result["username"] = username
+                    }
+                    if let credential = server["credential"] as? String {
+                        result["credential"] = credential
+                    }
+                    return result
+                }
             }
         } catch {}
         
@@ -577,16 +604,23 @@ final class WalkieTalkieLink: @unchecked Sendable {
         waitingTimer = nil
         iceRefreshTimer = nil
         
-        if let serverURL, let accessCode, let sessionID {
-            let urlStr = "\(serverURL)/v3/channels/1/session/\(sessionID)?access_code=\(accessCode)"
+        if let serverURL, let sessionToken, let sessionID {
+            let urlStr = "\(serverURL)/v3/channels/1/session"
             if let url = URL(string: urlStr) {
+                let body = ["session_id": sessionID]
+                guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
+                
                 var req = URLRequest(url: url)
                 req.httpMethod = "DELETE"
+                req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = jsonData
                 _ = try? await URLSession.shared.data(for: req)
             }
         }
         
         sessionID = nil
+        sessionToken = nil
         revision = 0
         negotiationID = nil
         peerTuned = false
