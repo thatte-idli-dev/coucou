@@ -72,7 +72,7 @@ actor WalkieTestClient {
             streamTask = Task {
                 var hasResumed = false
                 
-                func resumeOnce(with result: Result<(String, String), Error>) {
+                func resumeOnce(with result: Result<(sessionID: String, member: String), Error>) {
                     guard !hasResumed else { return }
                     hasResumed = true
                     continuation.resume(with: result)
