@@ -7,16 +7,21 @@ This directory contains a **test-only vendored copy** of the Talky-Talky v3 sign
 - **Pinned to git tree**: `de321d4a3b2c81f6c050b5feb3f2afb0dd57e091`
 - **Last updated**: 2026-10-09
 - **Purpose**: E2E testing of the walkie-talkie protocol implementation
-- **Byte-identical to**: Live production server
+- **Source**: Byte-identical to live production server with one test-only patch
+
+## Test Patch
+
+⚠️ **`service.go` has been patched for local testing** ⚠️
+
+- **Modification**: `validateOrigin()` allows `http://` scheme for `localhost` and `127.0.0.1`
+- **Reason**: E2E tests run server locally without TLS
+- **Production**: Unchanged - live server enforces HTTPS
 
 ## Important Rules
 
-⚠️ **DO NOT EDIT THESE FILES** ⚠️
-
-1. These files must remain **byte-identical** to the upstream source
-2. Any protocol changes must come from the upstream repository
-3. To refresh: re-copy the latest files from `thatte-idli-dev/Talky-Talky/server/`
-4. This directory is **excluded from all app targets** (test-only)
+1. Protocol changes must come from the upstream repository
+2. To refresh: re-copy the latest files from `thatte-idli-dev/Talky-Talky/server/` and re-apply the test patch
+3. This directory is **excluded from all app targets** (test-only)
 
 ## Usage
 

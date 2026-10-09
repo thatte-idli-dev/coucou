@@ -11,49 +11,19 @@ go build -o "$TEMP_DIR/talky-server" .
 
 echo "→ Initializing server config with TURN servers"
 cd "$TEMP_DIR"
-# Init requires HTTPS origin, but we'll patch it for local testing
-./talky-server init --config=config.json --origin=https://test.local > channels.txt
+# Server now allows HTTP for localhost origins (patched for testing)
+./talky-server init --config=config.json --origin=http://127.0.0.1:8080 > channels.txt
 
-# Add TURN config and patch origin for local testing
-python3 << 'PYTHON_EOF'
-import json, base64
-
+# Add TURN config
+python3 -c "
+import json
 with open('config.json', 'r') as f:
     config = json.load(f)
-config['origin'] = 'http://127.0.0.1:8080'
 config['relay_urls'] = ['turn:127.0.0.1:3478', 'turns:127.0.0.1:5349']
 config['relay_secret'] = 'test-turn-secret-key'
 with open('config.json', 'w') as f:
     json.dump(config, f, indent=2)
-
-# Patch access codes in channels.txt to use http://127.0.0.1:8080
-with open('channels.txt', 'r') as f:
-    lines = f.readlines()
-with open('channels.txt', 'w') as f:
-    for line in lines:
-        if 'Channel' in line and ':' in line:
-            parts = line.split()
-            code_index = -1
-            for i, p in enumerate(parts):
-                if len(p) > 50 and p[0] not in ['C', '#']:
-                    code_index = i
-                    break
-            if code_index >= 0:
-                code = parts[code_index]
-                try:
-                    # Add padding if needed
-                    padding = (4 - len(code) % 4) % 4
-                    padded = code + '=' * padding
-                    decoded = base64.b64decode(padded)
-                    data = json.loads(decoded)
-                    data['origin'] = 'http://127.0.0.1:8080'
-                    encoded = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip('=')
-                    parts[code_index] = encoded
-                    line = ' '.join(parts) + '\n'
-                except Exception as e:
-                    print(f"Failed to patch code: {e}")
-        f.write(line)
-PYTHON_EOF
+"
 
 echo "→ Extracting channel 1 access code"
 ACCESS_CODE=$(grep "Channel 1:" channels.txt | awk '{print $3}')

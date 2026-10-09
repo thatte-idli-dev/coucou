@@ -28,7 +28,10 @@ type Config struct {
 
 func validateOrigin(origin string) error {
 	u, err := url.Parse(origin)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || strings.Contains(u.Hostname(), "%") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(origin, "#") || u.Fragment != "" || u.Opaque != "" || strings.ContainsAny(origin, "\r\n\t ") {
+	// Allow HTTP for localhost/127.0.0.1 testing
+	allowHTTP := u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1"
+	validScheme := u.Scheme == "https" || (allowHTTP && u.Scheme == "http")
+	if err != nil || !validScheme || u.Hostname() == "" || strings.Contains(u.Hostname(), "%") || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(origin, "#") || u.Fragment != "" || u.Opaque != "" || strings.ContainsAny(origin, "\r\n\t ") {
 		return errors.New("origin must be an HTTPS origin without path, credentials, query, or fragment")
 	}
 	if u.Port() != "" {
