@@ -357,7 +357,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     Task { await self?.sendAnswer(answer) }
                 }
             )
-            WalkieTalkieAudio.shared.setMicEnabled(true)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(true)
+            }
             
             state = .waiting(started: Date())
             await sendPresence()
@@ -367,12 +369,16 @@ final class WalkieTalkieLink: @unchecked Sendable {
         case .waiting:
             if case .waiting(started: _) = state {
                 state = .waiting(started: Date())
-                WalkieTalkieAudio.shared.setMicEnabled(true)
+                await MainActor.run {
+                    WalkieTalkieAudio.shared.setMicEnabled(true)
+                }
             }
             
         case .inCall(mode: .pushToTalk):
             state = .inCall(mode: .pushToTalk(transmitting: true))
-            WalkieTalkieAudio.shared.setMicEnabled(true)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(true)
+            }
             await sendPresence()
             
         case .inCall(mode: .handsFree):
@@ -386,11 +392,15 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func handlePTTUp() async {
         switch state {
         case .waiting:
-            WalkieTalkieAudio.shared.setMicEnabled(false)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(false)
+            }
             
         case .inCall(mode: .pushToTalk):
             state = .inCall(mode: .pushToTalk(transmitting: false))
-            WalkieTalkieAudio.shared.setMicEnabled(false)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(false)
+            }
             await sendPresence()
             
         default:
@@ -423,7 +433,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     Task { await self?.sendAnswer(answer) }
                 }
             )
-            WalkieTalkieAudio.shared.setMicEnabled(true)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(true)
+            }
             
             state = .waiting(started: Date())
             await sendPresence()
@@ -435,7 +447,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
         case .inCall(mode: .pushToTalk):
             state = .inCall(mode: .handsFree)
-            WalkieTalkieAudio.shared.setMicEnabled(true)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(true)
+            }
             await sendPresence()
             
         case .inCall(mode: .handsFree):
@@ -471,7 +485,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
         if case .waiting = state {
             await stopWaitingAnimation()
             state = .connected(tuned: false)
-            WalkieTalkieAudio.shared.setMicEnabled(false)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(false)
+            }
             await sendPresence()
         }
     }
