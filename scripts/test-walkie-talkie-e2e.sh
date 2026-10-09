@@ -11,7 +11,7 @@ go build -o "$TEMP_DIR/talky-server" .
 
 echo "→ Initializing server config with TURN servers"
 cd "$TEMP_DIR"
-./talky-server init --config=config.json --origin=https://test.local > channels.txt
+./talky-server init --config=config.json --origin=http://127.0.0.1:8080 > channels.txt
 
 # Add TURN config to generated config
 python3 -c "
