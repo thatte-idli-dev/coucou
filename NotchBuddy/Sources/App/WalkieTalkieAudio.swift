@@ -26,14 +26,10 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         self.onAnswer = onAnswer
         
         let config = WKWebViewConfiguration()
-        config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         let contentController = WKUserContentController()
         contentController.add(self, name: "native")
         config.userContentController = contentController
-        
-        let prefs = WKWebPreferences()
-        config.preferences = prefs
         
         // PRIVATE WEBKIT API: _getUserMediaRequiresFocus
         // This is a private WebKit preference that allows getUserMedia to work
@@ -41,8 +37,8 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         // for the direct NotchBuddy build (not App Store) where we need
         // immediate mic access on hotkey press while running as LSUIElement.
         // The alternative would be to require the stasel/WebRTC.swift package.
-        if prefs.responds(to: Selector(("_setGetUserMediaRequiresFocus:"))) {
-            prefs.setValue(false, forKey: "_getUserMediaRequiresFocus")
+        if config.preferences.responds(to: Selector(("_setGetUserMediaRequiresFocus:"))) {
+            config.preferences.setValue(false, forKey: "_getUserMediaRequiresFocus")
         }
         
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 1, height: 1), configuration: config)

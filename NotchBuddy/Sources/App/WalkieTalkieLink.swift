@@ -256,14 +256,16 @@ final class WalkieTalkieLink: @unchecked Sendable {
             return
         }
         
-        WalkieTalkieAudio.shared.setupWebView(
-            onIceCandidate: { [weak self] candidate in
-                Task { await self?.sendIceCandidate(candidate) }
-            },
-            onAnswer: { [weak self] answer in
-                Task { await self?.sendAnswer(answer) }
-            }
-        )
+        await MainActor.run {
+            WalkieTalkieAudio.shared.setupWebView(
+                onIceCandidate: { [weak self] candidate in
+                    Task { await self?.sendIceCandidate(candidate) }
+                },
+                onAnswer: { [weak self] answer in
+                    Task { await self?.sendAnswer(answer) }
+                }
+            )
+        }
         
         if isSeatA {
             do {
@@ -290,11 +292,15 @@ final class WalkieTalkieLink: @unchecked Sendable {
         }
         
         if let answerJSON = dict["answer"] as? String, isSeatA {
-            WalkieTalkieAudio.shared.handleAnswer(answerJSON)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.handleAnswer(answerJSON)
+            }
         }
         
         if let candidateJSON = dict["ice_candidate"] as? String {
-            WalkieTalkieAudio.shared.addIceCandidate(candidateJSON)
+            await MainActor.run {
+                WalkieTalkieAudio.shared.addIceCandidate(candidateJSON)
+            }
         }
     }
     
@@ -369,9 +375,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
         case .waiting:
             if case .waiting(started: _) = state {
                 state = .waiting(started: Date())
-                await MainActor.run {
-                    WalkieTalkieAudio.shared.setMicEnabled(true)
-                }
+            }
+            await MainActor.run {
+                WalkieTalkieAudio.shared.setMicEnabled(true)
             }
             
         case .inCall(mode: .pushToTalk):
