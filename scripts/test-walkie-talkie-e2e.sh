@@ -9,9 +9,20 @@ echo "→ Building vendored Talky-Talky server"
 cd "$SCRIPT_DIR/../tests/talky-server"
 go build -o "$TEMP_DIR/talky-server" .
 
-echo "→ Initializing server config"
+echo "→ Initializing server config with TURN servers"
 cd "$TEMP_DIR"
 ./talky-server init --config=config.json --origin=https://test.local > channels.txt
+
+# Add TURN config to generated config
+python3 -c "
+import json
+with open('config.json', 'r') as f:
+    config = json.load(f)
+config['relay_urls'] = ['turn:127.0.0.1:3478', 'turns:127.0.0.1:5349']
+config['relay_secret'] = 'test-turn-secret-key'
+with open('config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+"
 
 echo "→ Extracting channel 1 access code"
 ACCESS_CODE=$(grep "Channel 1:" channels.txt | awk '{print $3}')
@@ -28,29 +39,27 @@ trap "kill $SERVER_PID 2>/dev/null || true; rm -rf $TEMP_DIR" EXIT
 
 sleep 2
 
+echo "→ Compiling E2E test with app protocol source"
 cat > "$TEMP_DIR/e2e_test.swift" << 'SWIFT_EOF'
 import Foundation
 
-actor WalkieProtocolClient {
+// Use the real app WalkieProtocol (compiled alongside)
+
+actor WalkieTestClient {
     let serverURL: String
     let channelToken: String
     var sessionID: String?
     var sessionToken: String?
     var negotiationID: String?
     var revision: Int = 0
-    var currentSSEEvent: String?
     var streamTask: Task<Void, Never>?
     
-    init(serverURL: String, accessCode: String) throws {
-        self.serverURL = serverURL
-        
-        // Decode access code to extract the token
-        guard let decoded = Data(base64Encoded: accessCode.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/"), options: .ignoreUnknownCharacters),
-              let json = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any],
-              let token = json["token"] as? String else {
+    init(accessCode: String) throws {
+        guard let components = WalkieProtocol.decodeAccessCode(accessCode) else {
             throw TestError.invalidAccessCode
         }
-        self.channelToken = token
+        self.serverURL = components.origin
+        self.channelToken = components.channelToken
     }
     
     func connect() async throws -> (sessionID: String, member: String) {
@@ -93,24 +102,23 @@ actor WalkieProtocolClient {
                             }
                             
                             if localEvent == "snapshot" && !hasResumed {
-                                guard let token = dict["session_token"] as? String,
-                                      let eventDict = dict["event"] as? [String: Any],
-                                      let sid = eventDict["session_id"] as? String,
-                                      let member = eventDict["member"] as? String else {
+                                guard let snapshot = WalkieProtocol.parseSnapshotEvent(dict) else {
                                     continuation.resume(throwing: TestError.invalidJoinEvent)
                                     hasResumed = true
                                     return
                                 }
                                 
-                                await self.setSession(id: sid, token: token)
+                                await self.setSession(
+                                    id: snapshot.sessionID,
+                                    token: snapshot.sessionToken
+                                )
                                 
-                                continuation.resume(returning: (sid, member))
+                                continuation.resume(returning: (snapshot.sessionID, snapshot.member))
                                 hasResumed = true
-                                // Keep reading to maintain connection
                             } else if localEvent == "state" {
-                                // Update negotiation ID from state events
-                                if let negotiationID = dict["negotiation_id"] as? String, !negotiationID.isEmpty {
-                                    await self.setNegotiationID(negotiationID)
+                                if let stateEvent = WalkieProtocol.parseStateEvent(dict),
+                                   let negID = stateEvent.negotiationID {
+                                    await self.setNegotiationID(negID)
                                 }
                             }
                         }
@@ -149,13 +157,13 @@ actor WalkieProtocolClient {
         
         revision += 1
         
-        let body: [String: Any] = [
-            "session_id": sessionID,
-            "revision": revision,
-            "tuned": tuned,
-            "transmitting": false,
-            "restart_negotiation": false
-        ]
+        let body = WalkieProtocol.buildPresenceBody(
+            sessionID: sessionID,
+            revision: revision,
+            tuned: tuned,
+            transmitting: false,
+            restartNegotiation: false
+        )
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
             throw TestError.encodeFailed
@@ -180,12 +188,12 @@ actor WalkieProtocolClient {
             throw TestError.notConnected
         }
         
-        let body: [String: Any] = [
-            "session_id": sessionID,
-            "negotiation_id": negotiationID,
-            "kind": kind,
-            "payload": payload
-        ]
+        let body = WalkieProtocol.buildSignalBody(
+            sessionID: sessionID,
+            negotiationID: negotiationID,
+            kind: kind,
+            payload: payload
+        )
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
             throw TestError.encodeFailed
@@ -205,7 +213,7 @@ actor WalkieProtocolClient {
         }
     }
     
-    func getICE() async throws -> [[String: String]]? {
+    func getICE() async throws -> WalkieProtocol.ICEServerConfig? {
         guard let sessionToken else {
             throw TestError.notConnected
         }
@@ -219,7 +227,6 @@ actor WalkieProtocolClient {
             throw TestError.invalidResponse
         }
         
-        // Server returns 503 when no TURN servers are configured
         if httpResp.statusCode == 503 {
             return nil
         }
@@ -229,13 +236,11 @@ actor WalkieProtocolClient {
         }
         
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let urls = dict["urls"] as? [String],
-              let username = dict["username"] as? String,
-              let credential = dict["credential"] as? String else {
+              let config = WalkieProtocol.parseICEResponse(dict) else {
             throw TestError.invalidICEResponse
         }
         
-        return [["urls": urls.joined(separator: ","), "username": username, "credential": credential]]
+        return config
     }
     
     func leave() async throws {
@@ -243,7 +248,7 @@ actor WalkieProtocolClient {
             throw TestError.notConnected
         }
         
-        let body = ["session_id": sessionID]
+        let body = WalkieProtocol.buildLeaveBody(sessionID: sessionID)
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
             throw TestError.encodeFailed
         }
@@ -283,27 +288,25 @@ enum TestError: Error {
     case iceFailed
     case invalidICEResponse
     case leaveFailed
+    case noTURNCredentials
 }
 
 @main
-struct E2ETest {
+struct WalkieE2ETest {
     static func main() async {
         do {
-            let serverURL = "http://localhost:8080"
-            guard let accessCode = ProcessInfo.processInfo.environment["ACCESS_CODE"] else {
-                print("❌ ACCESS_CODE environment variable not set")
-                exit(1)
-            }
+            let serverURL = "http://127.0.0.1:8080"
+            let accessCode = ProcessInfo.processInfo.environment["ACCESS_CODE"]!
             
             print("✓ Starting E2E test")
             
             // Client A joins
-            let clientA = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientA = try WalkieTestClient(accessCode: accessCode)
             let (sidA, memberA) = try await clientA.connect()
             print("✓ Client A joined: session=\(sidA), member=\(memberA)")
             
             // Client B joins
-            let clientB = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientB = try WalkieTestClient(accessCode: accessCode)
             let (sidB, memberB) = try await clientB.connect()
             print("✓ Client B joined: session=\(sidB), member=\(memberB)")
             
@@ -322,7 +325,7 @@ struct E2ETest {
             // Wait for negotiation_id from state events
             var negotiationID: String?
             for _ in 0..<20 {
-                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                try await Task.sleep(nanoseconds: 100_000_000)
                 if let nid = await clientA.getNegotiationID() {
                     negotiationID = nid
                     break
@@ -335,38 +338,45 @@ struct E2ETest {
             }
             print("✓ Negotiation ID: \(negotiationID)")
             
+            // Fetch ICE servers before signaling
+            guard let iceConfig = try await clientA.getICE() else {
+                print("❌ No ICE servers returned (expected TURN)")
+                exit(1)
+            }
+            
+            // Verify TURN credentials exist (hard requirement)
+            let hasTURN = iceConfig.urls.contains { $0.starts(with: "turn:") || $0.starts(with: "turns:") }
+            guard hasTURN, 
+                  let username = iceConfig.username, !username.isEmpty,
+                  let credential = iceConfig.credential, !credential.isEmpty else {
+                print("❌ TURN servers must include valid credentials")
+                throw TestError.noTURNCredentials
+            }
+            print("✓ Client A got ICE with TURN credentials (username: \(username))")
+            
             // Client A sends offer
-            try await clientA.sendSignal(kind: "offer", payload: ["offer": "{\"type\":\"offer\",\"sdp\":\"v=0...\"}"], negotiationID: negotiationID)
+            try await clientA.sendSignal(
+                kind: "offer",
+                payload: ["offer": "{\"type\":\"offer\",\"sdp\":\"v=0...\"}"],
+                negotiationID: negotiationID
+            )
             print("✓ Client A sent offer")
             
             // Client B sends answer
-            try await clientB.sendSignal(kind: "answer", payload: ["answer": "{\"type\":\"answer\",\"sdp\":\"v=0...\"}"], negotiationID: negotiationID)
+            try await clientB.sendSignal(
+                kind: "answer",
+                payload: ["answer": "{\"type\":\"answer\",\"sdp\":\"v=0...\"}"],
+                negotiationID: negotiationID
+            )
             print("✓ Client B sent answer")
             
             // Client B sends ICE candidate
-            try await clientB.sendSignal(kind: "candidate", payload: ["ice_candidate": "{\"candidate\":\"candidate:1 1 UDP...\"}"], negotiationID: negotiationID)
+            try await clientB.sendSignal(
+                kind: "candidate",
+                payload: ["ice_candidate": "{\"candidate\":\"candidate:1 1 UDP...\"}"],
+                negotiationID: negotiationID
+            )
             print("✓ Client B sent ICE candidate")
-            
-            // Both request ICE servers
-            if let iceA = try await clientA.getICE() {
-                print("✓ Client A got ICE servers: \(iceA.count) servers")
-                
-                if let iceB = try await clientB.getICE() {
-                    print("✓ Client B got ICE servers: \(iceB.count) servers")
-                    
-                    // Verify TURN credentials exist
-                    if let server = iceA.first,
-                       let urls = server["urls"], urls.contains("turn:"),
-                       let username = server["username"], !username.isEmpty,
-                       let credential = server["credential"], !credential.isEmpty {
-                        print("✓ ICE servers include TURN with credentials")
-                    } else {
-                        print("⚠️  No TURN credentials in ICE servers")
-                    }
-                }
-            } else {
-                print("⚠️  No TURN servers configured on server (503)")
-            }
             
             // Client A leaves
             try await clientA.leave()
@@ -377,35 +387,36 @@ struct E2ETest {
             print("✓ Client B left")
             
             // Third client should succeed now (channel has room)
-            let clientC = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientC = try WalkieTestClient(accessCode: accessCode)
             let (sidC, memberC) = try await clientC.connect()
             print("✓ Client C joined: session=\(sidC), member=\(memberC)")
             
             // Fourth client joins
-            let clientD = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientD = try WalkieTestClient(accessCode: accessCode)
             let (sidD, memberD) = try await clientD.connect()
             print("✓ Client D joined: session=\(sidD), member=\(memberD)")
             
             // Fifth client should get 409 (channel full)
-            let clientE = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientE = try WalkieTestClient(accessCode: accessCode)
             do {
                 _ = try await clientE.connect()
-                print("❌ Client E should have received 409 but connected successfully")
+                print("❌ Client E should have gotten 409")
                 exit(1)
             } catch TestError.channelFull {
                 print("✓ Client E got 409 (channel full)")
             }
             
             // Cleanup
-            try await clientC.leave()
-            try await clientD.leave()
+            try? await clientC.leave()
+            try? await clientD.leave()
             print("✓ Cleanup complete")
             
-            print("\n✅ All E2E tests passed")
-            exit(0)
+            print("")
+            print("✅ All E2E tests passed")
             
         } catch {
-            print("\n❌ E2E test failed: \(error)")
+            print("")
+            print("❌ E2E test failed: \(error)")
             exit(1)
         }
     }
@@ -413,6 +424,10 @@ struct E2ETest {
 SWIFT_EOF
 
 echo "→ Running E2E signaling test"
-swiftc -parse-as-library -o "$TEMP_DIR/e2e_test" "$TEMP_DIR/e2e_test.swift"
-export ACCESS_CODE="$ACCESS_CODE"
-"$TEMP_DIR/e2e_test"
+cd "$TEMP_DIR"
+ACCESS_CODE="$ACCESS_CODE" swiftc \
+    -o e2e_test \
+    "$SCRIPT_DIR/../NotchBuddy/Sources/App/WalkieProtocol.swift" \
+    e2e_test.swift
+
+./e2e_test

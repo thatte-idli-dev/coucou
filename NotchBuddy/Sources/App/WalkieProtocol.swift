@@ -1,0 +1,177 @@
+import Foundation
+
+/// Pure protocol layer for Talky-Talky v3 signaling.
+/// No AppKit dependencies, suitable for both app and test compilation.
+enum WalkieProtocol {
+    
+    // MARK: - Access Code
+    
+    struct AccessCodeComponents {
+        let origin: String
+        let channelToken: String
+        let channelID: String
+        let channel: Int
+    }
+    
+    static func decodeAccessCode(_ accessCode: String) -> AccessCodeComponents? {
+        // Base64URL decode (with or without padding)
+        var base64 = accessCode
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        
+        let padding = (4 - base64.count % 4) % 4
+        if padding > 0 {
+            base64 += String(repeating: "=", count: padding)
+        }
+        
+        guard let decoded = Data(base64Encoded: base64),
+              let json = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any],
+              let origin = json["origin"] as? String,
+              let token = json["token"] as? String,
+              let channelID = json["channel_id"] as? String,
+              let channel = json["channel"] as? Int else {
+            return nil
+        }
+        
+        return AccessCodeComponents(
+            origin: origin,
+            channelToken: token,
+            channelID: channelID,
+            channel: channel
+        )
+    }
+    
+    // MARK: - SSE Events
+    
+    struct SnapshotEvent {
+        let sessionToken: String
+        let sessionID: String
+        let member: String
+    }
+    
+    struct StateEvent {
+        let negotiationID: String?
+        let localTuned: Bool
+        let peerTuned: Bool
+    }
+    
+    struct SignalEvent {
+        let from: String
+        let kind: String
+        let payload: [String: Any]
+    }
+    
+    static func parseSnapshotEvent(_ data: [String: Any]) -> SnapshotEvent? {
+        guard let sessionToken = data["session_token"] as? String,
+              let event = data["event"] as? [String: Any],
+              let sessionID = event["session_id"] as? String,
+              let member = event["member"] as? String else {
+            return nil
+        }
+        
+        return SnapshotEvent(
+            sessionToken: sessionToken,
+            sessionID: sessionID,
+            member: member
+        )
+    }
+    
+    static func parseStateEvent(_ data: [String: Any]) -> StateEvent? {
+        let negotiationID = data["negotiation_id"] as? String
+        let localStatus = data["local"] as? [String: Any]
+        let peerStatus = data["peer"] as? [String: Any]
+        
+        let localTuned = localStatus?["tuned"] as? Bool ?? false
+        let peerTuned = peerStatus?["tuned"] as? Bool ?? false
+        
+        return StateEvent(
+            negotiationID: negotiationID?.isEmpty == false ? negotiationID : nil,
+            localTuned: localTuned,
+            peerTuned: peerTuned
+        )
+    }
+    
+    static func parseSignalEvent(_ data: [String: Any]) -> SignalEvent? {
+        guard let from = data["from"] as? String,
+              let kind = data["kind"] as? String,
+              let payload = data["payload"] else {
+            return nil
+        }
+        
+        var payloadDict: [String: Any] = [:]
+        if let payloadData = payload as? Data {
+            payloadDict = (try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]) ?? [:]
+        } else if let payloadString = payload as? String,
+                  let payloadData = payloadString.data(using: .utf8) {
+            payloadDict = (try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any]) ?? [:]
+        } else if let dict = payload as? [String: Any] {
+            payloadDict = dict
+        }
+        
+        return SignalEvent(from: from, kind: kind, payload: payloadDict)
+    }
+    
+    // MARK: - Request Bodies
+    
+    static func buildPresenceBody(sessionID: String, revision: Int, tuned: Bool, transmitting: Bool, restartNegotiation: Bool = false) -> [String: Any] {
+        return [
+            "session_id": sessionID,
+            "revision": revision,
+            "tuned": tuned,
+            "transmitting": transmitting,
+            "restart_negotiation": restartNegotiation
+        ]
+    }
+    
+    static func buildSignalBody(sessionID: String, negotiationID: String, kind: String, payload: [String: Any]) -> [String: Any] {
+        return [
+            "session_id": sessionID,
+            "negotiation_id": negotiationID,
+            "kind": kind,
+            "payload": payload
+        ]
+    }
+    
+    static func buildLeaveBody(sessionID: String) -> [String: Any] {
+        return ["session_id": sessionID]
+    }
+    
+    // MARK: - ICE Server Response
+    
+    struct ICEServerConfig {
+        let urls: [String]
+        let username: String?
+        let credential: String?
+        let expiresAt: Int64?
+        let refreshAfter: Int?
+    }
+    
+    static func parseICEResponse(_ data: [String: Any]) -> ICEServerConfig? {
+        // Server returns single server with urls, username, credential
+        guard let urlsValue = data["urls"] else {
+            return nil
+        }
+        
+        let urls: [String]
+        if let urlString = urlsValue as? String {
+            urls = [urlString]
+        } else if let urlArray = urlsValue as? [String] {
+            urls = urlArray
+        } else {
+            return nil
+        }
+        
+        let username = data["username"] as? String
+        let credential = data["credential"] as? String
+        let expiresAt = data["expires_at"] as? Int64
+        let refreshAfter = data["refresh_after"] as? Int
+        
+        return ICEServerConfig(
+            urls: urls,
+            username: username,
+            credential: credential,
+            expiresAt: expiresAt,
+            refreshAfter: refreshAfter
+        )
+    }
+}
