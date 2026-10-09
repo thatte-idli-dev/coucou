@@ -111,8 +111,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := randomToken("sess_")
 	sessionToken := randomToken("tok_")
+	
+	// Assign member based on which are already taken
+	memberATaken := false
+	for _, s := range ch.sessions {
+		if s.Member == "A" {
+			memberATaken = true
+			break
+		}
+	}
 	member := "A"
-	if len(ch.sessions) == 1 {
+	if memberATaken {
 		member = "B"
 	}
 
