@@ -33,7 +33,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var accessCode: String?
     private var channelFull: Bool = false
     
-    private var waitingAnimationToken: Any?
+    private var waitingAnimationToken: NSObject?
     
     private init() {
         NotificationCenter.default.addObserver(
@@ -477,7 +477,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func startWaitingAnimation() async {
-        SoundEngine.play("greet")
+        SoundEngine.shared.play("greet")
         NotificationCenter.default.post(name: .botGreet, object: nil)
         
         let token = NSObject()
@@ -531,7 +531,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
         iceRefreshTimer?.cancel()
         iceRefreshTimer = nil
         
-        WalkieTalkieAudio.shared.setMicEnabled(false)
+        await MainActor.run {
+            WalkieTalkieAudio.shared.setMicEnabled(false)
+        }
         negotiationID = nil
         
         state = .connected(tuned: false)
