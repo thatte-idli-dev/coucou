@@ -1322,11 +1322,6 @@ extension Notification.Name {
     static let greetingHover    = Notification.Name("notchBuddy.greetingHover")
     static let greetingInterrupt = Notification.Name("notchBuddy.greetingInterrupt")
     static let openWardrobeFromDesktop = Notification.Name("notchBuddy.openWardrobeFromDesktop")
-    // Walkie-talkie gestures
-    static let walkiePTTDown    = Notification.Name("notchBuddy.walkiePTTDown")
-    static let walkiePTTUp      = Notification.Name("notchBuddy.walkiePTTUp")
-    static let walkieDoubleTap  = Notification.Name("notchBuddy.walkieDoubleTap")
-    static let walkieTap        = Notification.Name("notchBuddy.walkieTap")
     // Island moved to another screen (resting size may differ: notch vs bar)
     static let islandScreenChanged = Notification.Name("notchBuddy.islandScreenChanged")
 }
