@@ -82,7 +82,7 @@ actor WalkieProtocolClient {
                     continue
                 }
                 
-                if currentSSEEvent == "join" {
+                if currentSSEEvent == "snapshot" {
                     guard let token = dict["session_token"] as? String,
                           let event = dict["event"] as? [String: Any],
                           let sid = event["session_id"] as? String,
