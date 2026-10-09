@@ -5,12 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
-echo "→ Building mock Talky-Talky server"
-cd "$SCRIPT_DIR/mock-server"
-CGO_ENABLED=0 go build -ldflags="-w -s" -o "$TEMP_DIR/talky-server" .
+echo "→ Cloning thatte-idli-dev/Talky-Talky"
+cd "$TEMP_DIR"
+git clone https://github.com/thatte-idli-dev/Talky-Talky.git
+cd Talky-Talky/server
+
+echo "→ Building Talky-Talky server"
+go build -o talky-server .
 
 echo "→ Starting server in background"
-cd "$TEMP_DIR"
 ./talky-server &
 SERVER_PID=$!
 trap "kill $SERVER_PID 2>/dev/null || true; rm -rf $TEMP_DIR" EXIT
