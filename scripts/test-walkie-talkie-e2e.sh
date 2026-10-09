@@ -205,7 +205,7 @@ actor WalkieProtocolClient {
         }
     }
     
-    func getICE() async throws -> [[String: String]] {
+    func getICE() async throws -> [[String: String]]? {
         guard let sessionToken else {
             throw TestError.notConnected
         }
@@ -215,27 +215,27 @@ actor WalkieProtocolClient {
         req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
         
         let (data, response) = try await URLSession.shared.data(for: req)
-        guard let httpResp = response as? HTTPURLResponse,
-              httpResp.statusCode == 200 else {
+        guard let httpResp = response as? HTTPURLResponse else {
+            throw TestError.invalidResponse
+        }
+        
+        // Server returns 503 when no TURN servers are configured
+        if httpResp.statusCode == 503 {
+            return nil
+        }
+        
+        guard httpResp.statusCode == 200 else {
             throw TestError.iceFailed
         }
         
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let servers = dict["ice_servers"] as? [[String: Any]] else {
+              let urls = dict["urls"] as? [String],
+              let username = dict["username"] as? String,
+              let credential = dict["credential"] as? String else {
             throw TestError.invalidICEResponse
         }
         
-        return servers.compactMap { server in
-            guard let urls = server["urls"] as? String else { return nil }
-            var result = ["urls": urls]
-            if let username = server["username"] as? String {
-                result["username"] = username
-            }
-            if let credential = server["credential"] as? String {
-                result["credential"] = credential
-            }
-            return result
-        }
+        return [["urls": urls.joined(separator: ","), "username": username, "credential": credential]]
     }
     
     func leave() async throws {
@@ -348,26 +348,24 @@ struct E2ETest {
             print("✓ Client B sent ICE candidate")
             
             // Both request ICE servers
-            let iceA = try await clientA.getICE()
-            print("✓ Client A got ICE servers: \(iceA.count) servers")
-            
-            let iceB = try await clientB.getICE()
-            print("✓ Client B got ICE servers: \(iceB.count) servers")
-            
-            // Verify TURN credentials exist
-            var hasTURN = false
-            for server in iceA {
-                if let urls = server["urls"], urls.hasPrefix("turn:") {
-                    if server["username"] != nil && server["credential"] != nil {
-                        hasTURN = true
+            if let iceA = try await clientA.getICE() {
+                print("✓ Client A got ICE servers: \(iceA.count) servers")
+                
+                if let iceB = try await clientB.getICE() {
+                    print("✓ Client B got ICE servers: \(iceB.count) servers")
+                    
+                    // Verify TURN credentials exist
+                    if let server = iceA.first,
+                       let urls = server["urls"], urls.contains("turn:"),
+                       let username = server["username"], !username.isEmpty,
+                       let credential = server["credential"], !credential.isEmpty {
                         print("✓ ICE servers include TURN with credentials")
-                        break
+                    } else {
+                        print("⚠️  No TURN credentials in ICE servers")
                     }
                 }
-            }
-            
-            if !hasTURN {
-                print("⚠️  No TURN server with credentials found (STUN-only)")
+            } else {
+                print("⚠️  No TURN servers configured on server (503)")
             }
             
             // Client A leaves
