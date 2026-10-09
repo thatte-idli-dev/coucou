@@ -250,7 +250,7 @@ func (s *Server) handleSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	kind := body["kind"].(string)
+	_ = body["kind"]
 	payload := body["payload"].(map[string]interface{})
 
 	channelID := 1
