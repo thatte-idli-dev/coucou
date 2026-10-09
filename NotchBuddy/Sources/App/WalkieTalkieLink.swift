@@ -431,15 +431,15 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 return
             }
             
-            WalkieTalkieAudio.shared.setupWebView(
-                onIceCandidate: { [weak self] candidate in
-                    Task { await self?.sendIceCandidate(candidate) }
-                },
-                onAnswer: { [weak self] answer in
-                    Task { await self?.sendAnswer(answer) }
-                }
-            )
             await MainActor.run {
+                WalkieTalkieAudio.shared.setupWebView(
+                    onIceCandidate: { [weak self] candidate in
+                        Task { await self?.sendIceCandidate(candidate) }
+                    },
+                    onAnswer: { [weak self] answer in
+                        Task { await self?.sendAnswer(answer) }
+                    }
+                )
                 WalkieTalkieAudio.shared.setMicEnabled(true)
             }
             
