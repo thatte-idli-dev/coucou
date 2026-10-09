@@ -84,8 +84,18 @@ struct WalkieTalkieE2ETest {
         await linkA.configure(serverURL: serverURL, accessCode: accessCodeA)
         await linkB.configure(serverURL: serverURL, accessCode: accessCodeB)
         
-        // Wait for connection
-        try await Task.sleep(for: .seconds(1))
+        // Wait for SSE connection and snapshot to arrive
+        print("  ⏳ Waiting for SSE connection...")
+        try await Task.sleep(for: .seconds(2))
+        
+        // Verify both are connected
+        guard await linkA.isConnected() else {
+            throw TestError("Client A did not connect")
+        }
+        guard await linkB.isConnected() else {
+            throw TestError("Client B did not connect")
+        }
+        print("  ✓ Both clients connected")
         
         // A tunes (PTT down) - enters waiting state
         print("  → Client A: PTT down (tuning, waiting)")
@@ -98,12 +108,20 @@ struct WalkieTalkieE2ETest {
         }
         print("  ✓ Client A is waiting")
         
+        // Wait for A's presence to propagate to server
+        try await Task.sleep(for: .seconds(1))
+        
         // B tunes (PTT down) - both now tuned, negotiation should start
         print("  → Client B: PTT down (tuning)")
         await linkB.simulatePTTDown()
         
-        // Wait for negotiation (longer timeout for CI environment)
-        try await Task.sleep(for: .seconds(5))
+        // Wait for both presences to reach server and state broadcast to propagate
+        print("  ⏳ Waiting for server state synchronization...")
+        try await Task.sleep(for: .seconds(3))
+        
+        // Wait for negotiation to complete
+        print("  ⏳ Waiting for WebRTC negotiation...")
+        try await Task.sleep(for: .seconds(3))
         
         // Verify both entered call state
         let aState = await linkA.getState()
@@ -401,6 +419,10 @@ actor TestWalkieTalkieLink {
         return state
     }
     
+    func isConnected() async -> Bool {
+        return sessionID != nil && sessionToken != nil
+    }
+    
     func simulatePTTDown() async {
         switch state {
         case .connected(tuned: false):
@@ -506,6 +528,7 @@ actor TestWalkieTalkieLink {
                 sessionToken = snapshot.sessionToken
                 sessionID = snapshot.sessionID
                 isSeatA = snapshot.member == "A"
+                print("[Test] Snapshot received: sessionID=\(sessionID ?? "nil"), member=\(snapshot.member)")
                 await startPresence()
                 
             case "state":
@@ -557,7 +580,10 @@ actor TestWalkieTalkieLink {
     }
     
     private func sendPresence() async {
-        guard let serverURL, let sessionToken, let sessionID else { return }
+        guard let serverURL, let sessionToken, let sessionID else {
+            print("[Test] sendPresence skipped: serverURL=\(serverURL != nil), sessionToken=\(sessionToken != nil), sessionID=\(sessionID != nil)")
+            return
+        }
         
         revision += 1
         
@@ -568,6 +594,8 @@ actor TestWalkieTalkieLink {
         } else {
             transmitting = false
         }
+        
+        print("[Test] Sending presence: tuned=\(tuned), transmitting=\(transmitting), revision=\(revision)")
         
         let body = WalkieProtocol.buildPresenceBody(
             sessionID: sessionID,
@@ -587,7 +615,14 @@ actor TestWalkieTalkieLink {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
-        _ = try? await URLSession.shared.data(for: req)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            if let httpResponse = response as? HTTPURLResponse {
+                print("[Test] Presence response: \(httpResponse.statusCode)")
+            }
+        } catch {
+            print("[Test] Presence error: \(error)")
+        }
     }
     
     private func fetchICEServers() async {
