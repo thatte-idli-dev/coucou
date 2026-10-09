@@ -7,7 +7,14 @@ trap "rm -rf $TEMP_DIR" EXIT
 
 echo "→ Cloning thatte-idli-dev/Talky-Talky"
 cd "$TEMP_DIR"
-git clone https://github.com/thatte-idli-dev/Talky-Talky.git
+
+# Use GITHUB_TOKEN if available (in CI), otherwise use standard https
+if [ -n "$GITHUB_TOKEN" ]; then
+    git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/thatte-idli-dev/Talky-Talky.git"
+else
+    git clone https://github.com/thatte-idli-dev/Talky-Talky.git
+fi
+
 cd Talky-Talky/server
 
 echo "→ Building Talky-Talky server"
