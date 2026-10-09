@@ -11,17 +11,44 @@ go build -o "$TEMP_DIR/talky-server" .
 
 echo "→ Initializing server config with TURN servers"
 cd "$TEMP_DIR"
-./talky-server init --config=config.json --origin=http://127.0.0.1:8080 > channels.txt
+# Init requires HTTPS origin, but we'll patch it for local testing
+./talky-server init --config=config.json --origin=https://test.local > channels.txt
 
-# Add TURN config to generated config
+# Add TURN config and patch origin for local testing
 python3 -c "
-import json
+import json, base64
 with open('config.json', 'r') as f:
     config = json.load(f)
+config['origin'] = 'http://127.0.0.1:8080'
 config['relay_urls'] = ['turn:127.0.0.1:3478', 'turns:127.0.0.1:5349']
 config['relay_secret'] = 'test-turn-secret-key'
 with open('config.json', 'w') as f:
     json.dump(config, f, indent=2)
+
+# Patch access codes in channels.txt to use http://127.0.0.1:8080
+with open('channels.txt', 'r') as f:
+    lines = f.readlines()
+with open('channels.txt', 'w') as f:
+    for line in lines:
+        if 'Channel' in line and ':' in line:
+            parts = line.split()
+            code_index = -1
+            for i, p in enumerate(parts):
+                if len(p) > 50 and p[0] not in ['C', '#']:
+                    code_index = i
+                    break
+            if code_index >= 0:
+                code = parts[code_index]
+                try:
+                    decoded = base64.b64decode(code + '==', validate=True)
+                    data = json.loads(decoded)
+                    data['origin'] = 'http://127.0.0.1:8080'
+                    encoded = base64.b64encode(json.dumps(data).encode()).decode().rstrip('=')
+                    parts[code_index] = encoded
+                    line = ' '.join(parts) + '\n'
+                except:
+                    pass
+        f.write(line)
 "
 
 echo "→ Extracting channel 1 access code"
