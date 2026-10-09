@@ -7,7 +7,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 
 echo "→ Building mock Talky-Talky server"
 cd "$SCRIPT_DIR/mock-server"
-go build -o "$TEMP_DIR/talky-server" .
+CGO_ENABLED=0 go build -ldflags="-w -s" -o "$TEMP_DIR/talky-server" .
 
 echo "→ Starting server in background"
 cd "$TEMP_DIR"
