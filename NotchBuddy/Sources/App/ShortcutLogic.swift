@@ -245,8 +245,8 @@ enum ShortcutLogic {
 /// - Double-tap within NSEvent.doubleClickInterval → toggle hands-free
 /// - Single tap → hang up / leave
 /// - Debounces key-repeat events while held
-final class WalkieGestureClassifier: Sendable {
-    enum Event: Sendable {
+final class WalkieGestureClassifier {
+    enum Event {
         case pttDown, pttUp, doubleTap, tap
     }
 

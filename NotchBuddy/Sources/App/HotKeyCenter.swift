@@ -18,10 +18,9 @@ private func coucouHotKeyEventHandler(
 ) -> OSStatus {
     guard let event else { return OSStatus(eventNotHandledErr) }
     
-    var kind = UInt32(0)
-    GetEventParameter(event, EventParamName(kEventParamKeyboardEventType),
-                      EventParamType(typeUInt32), nil, MemoryLayout<UInt32>.size, nil, &kind)
-    let isPressed = (kind == UInt32(kEventHotKeyPressed))
+    var eventKind: UInt32 = 0
+    GetEventKind(event, &eventKind)
+    let isPressed = (eventKind == UInt32(kEventHotKeyPressed))
     
     var hkid = EventHotKeyID()
     let err = GetEventParameter(

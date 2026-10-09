@@ -487,6 +487,8 @@ final class IslandWindowController: NSWindowController {
         guard isPressed else { return }
         
         switch action {
+        case .walkie:
+            break
         case .toggleIsland:
             if state.mode == .expanded {
                 collapse(allowPendingApproval: true)
