@@ -216,10 +216,15 @@ func (s *Server) handlePresence(w http.ResponseWriter, r *http.Request) {
 
 	var sess *Session
 	for _, s := range ch.sessions {
-		if s.Token == sessionToken && s.ID == sessionID {
+		if s.Token == sessionToken {
 			sess = s
 			break
 		}
+	}
+	
+	if sess != nil && sess.ID != sessionID {
+		http.Error(w, "Session ID mismatch", http.StatusBadRequest)
+		return
 	}
 
 	if sess == nil {
