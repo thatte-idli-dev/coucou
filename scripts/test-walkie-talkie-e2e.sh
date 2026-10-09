@@ -36,6 +36,7 @@ actor WalkieProtocolClient {
     let channelToken: String
     var sessionID: String?
     var sessionToken: String?
+    var negotiationID: String?
     var revision: Int = 0
     var currentSSEEvent: String?
     var streamTask: Task<Void, Never>?
@@ -106,6 +107,11 @@ actor WalkieProtocolClient {
                                 continuation.resume(returning: (sid, member))
                                 hasResumed = true
                                 // Keep reading to maintain connection
+                            } else if localEvent == "state" {
+                                // Update negotiation ID from state events
+                                if let negotiationID = dict["negotiation_id"] as? String, !negotiationID.isEmpty {
+                                    await self.setNegotiationID(negotiationID)
+                                }
                             }
                         }
                         
@@ -126,6 +132,14 @@ actor WalkieProtocolClient {
         self.sessionID = id
         self.sessionToken = token
         self.revision = 0
+    }
+    
+    private func setNegotiationID(_ id: String) {
+        self.negotiationID = id
+    }
+    
+    func getNegotiationID() -> String? {
+        return negotiationID
     }
     
     func sendPresence(tuned: Bool) async throws {
@@ -161,12 +175,14 @@ actor WalkieProtocolClient {
         }
     }
     
-    func sendSignal(kind: String, payload: [String: String]) async throws {
-        guard let sessionToken else {
+    func sendSignal(kind: String, payload: [String: String], negotiationID: String) async throws {
+        guard let sessionID, let sessionToken else {
             throw TestError.notConnected
         }
         
         let body: [String: Any] = [
+            "session_id": sessionID,
+            "negotiation_id": negotiationID,
             "kind": kind,
             "payload": payload
         ]
@@ -303,16 +319,32 @@ struct E2ETest {
             try await clientB.sendPresence(tuned: true)
             print("✓ Client B sent presence (tuned=true, revision=1)")
             
+            // Wait for negotiation_id from state events
+            var negotiationID: String?
+            for _ in 0..<20 {
+                try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+                if let nid = await clientA.getNegotiationID() {
+                    negotiationID = nid
+                    break
+                }
+            }
+            
+            guard let negotiationID else {
+                print("❌ No negotiation_id received")
+                exit(1)
+            }
+            print("✓ Negotiation ID: \(negotiationID)")
+            
             // Client A sends offer
-            try await clientA.sendSignal(kind: "offer", payload: ["offer": "{\"type\":\"offer\",\"sdp\":\"v=0...\"}"])
+            try await clientA.sendSignal(kind: "offer", payload: ["offer": "{\"type\":\"offer\",\"sdp\":\"v=0...\"}"], negotiationID: negotiationID)
             print("✓ Client A sent offer")
             
             // Client B sends answer
-            try await clientB.sendSignal(kind: "answer", payload: ["answer": "{\"type\":\"answer\",\"sdp\":\"v=0...\"}"])
+            try await clientB.sendSignal(kind: "answer", payload: ["answer": "{\"type\":\"answer\",\"sdp\":\"v=0...\"}"], negotiationID: negotiationID)
             print("✓ Client B sent answer")
             
             // Client B sends ICE candidate
-            try await clientB.sendSignal(kind: "ice", payload: ["ice_candidate": "{\"candidate\":\"candidate:1 1 UDP...\"}"])
+            try await clientB.sendSignal(kind: "candidate", payload: ["ice_candidate": "{\"candidate\":\"candidate:1 1 UDP...\"}"], negotiationID: negotiationID)
             print("✓ Client B sent ICE candidate")
             
             // Both request ICE servers
