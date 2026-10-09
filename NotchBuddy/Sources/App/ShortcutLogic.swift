@@ -18,6 +18,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
     case muteToggle        = "muteToggle"         // ⌃⌥M — mute / unmute sounds
     case desktopToggle     = "desktopToggle"      // ⌃⌥D — send Mochi to desktop / bring back
     case wardrobeToggle    = "wardrobeToggle"     // ⌃⌥G — open / close wardrobe
+    case walkie            = "walkie"             // ⌃⌥K — walkie-talkie PTT / toggle / hang up
 
     // MARK: UserDefaults keys
 
@@ -48,6 +49,7 @@ enum ShortcutAction: String, CaseIterable, Sendable {
         case .muteToggle:        return String(localized: "shortcut.mute-toggle")
         case .desktopToggle:     return String(localized: "shortcut.desktop-toggle")
         case .wardrobeToggle:    return String(localized: "shortcut.wardrobe")
+        case .walkie:            return String(localized: "shortcut.walkie")
         }
     }
 
@@ -104,6 +106,7 @@ enum ShortcutLogic {
         .muteToggle:        ShortcutSpec(keyCode: 46, nsFlags: ShortcutSpec.ctrlOpt),  // ⌃⌥M
         .desktopToggle:     ShortcutSpec(keyCode: 2,  nsFlags: ShortcutSpec.ctrlOpt),  // ⌃⌥D
         .wardrobeToggle:    ShortcutSpec(keyCode: 5,  nsFlags: ShortcutSpec.ctrlOpt),  // ⌃⌥G
+        .walkie:            ShortcutSpec(keyCode: 40, nsFlags: ShortcutSpec.ctrlOpt),  // ⌃⌥K
     ]
 
     // MARK: - Load / save (UserDefaults)
@@ -233,4 +236,76 @@ enum ShortcutLogic {
         ("⌘P",          String(localized: "shortcut.island.pin")),
         ("⎋",           String(localized: "shortcut.island.close")),
     ]
+}
+
+// MARK: - WalkieGestureClassifier
+
+/// Pure state machine for walkie-talkie hotkey gesture recognition.
+/// - Hold (>180ms) → PTT start; release → PTT stop
+/// - Double-tap within NSEvent.doubleClickInterval → toggle hands-free
+/// - Single tap → hang up / leave
+/// - Debounces key-repeat events while held
+final class WalkieGestureClassifier: Sendable {
+    enum Event: Sendable {
+        case pttDown, pttUp, doubleTap, tap
+    }
+
+    private let holdThresholdMS: Int64 = 180
+    private let doubleTapIntervalSec: TimeInterval
+
+    private var pressTime: Int64? = nil
+    private var lastReleaseTime: Int64? = nil
+    private var isHeld: Bool = false
+    private var firstTapPending: Bool = false
+
+    init(doubleTapInterval: TimeInterval = 0.5) {
+        self.doubleTapIntervalSec = doubleTapInterval
+    }
+
+    func keyDown(at nowMS: Int64) -> Event? {
+        if pressTime != nil { return nil }
+        pressTime = nowMS
+        return nil
+    }
+
+    func keyUp(at nowMS: Int64) -> Event? {
+        guard let down = pressTime else { return nil }
+        pressTime = nil
+
+        let durationMS = nowMS - down
+        if durationMS >= holdThresholdMS {
+            isHeld = false
+            return .pttUp
+        }
+
+        if firstTapPending, let lastUp = lastReleaseTime,
+           TimeInterval(nowMS - lastUp) / 1000.0 < doubleTapIntervalSec {
+            firstTapPending = false
+            lastReleaseTime = nil
+            return .doubleTap
+        }
+
+        firstTapPending = true
+        lastReleaseTime = nowMS
+        return nil
+    }
+
+    func checkHoldThreshold(at nowMS: Int64) -> Event? {
+        guard let down = pressTime, !isHeld else { return nil }
+        if nowMS - down >= holdThresholdMS {
+            isHeld = true
+            return .pttDown
+        }
+        return nil
+    }
+
+    func checkTapTimeout(at nowMS: Int64) -> Event? {
+        guard firstTapPending, let lastUp = lastReleaseTime else { return nil }
+        if TimeInterval(nowMS - lastUp) / 1000.0 >= doubleTapIntervalSec {
+            firstTapPending = false
+            lastReleaseTime = nil
+            return .tap
+        }
+        return nil
+    }
 }

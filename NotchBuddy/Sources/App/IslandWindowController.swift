@@ -469,13 +469,23 @@ final class IslandWindowController: NSWindowController {
 
     // MARK: - Global hot keys (Carbon)
 
+    private var walkieClassifier = WalkieGestureClassifier(doubleTapInterval: NSEvent.doubleClickInterval)
+    private var walkieCheckTimer: Timer?
+
     private func startHotKeys() {
-        HotKeyCenter.shared.start { [weak self] action in
-            self?.handleHotKey(action)
+        HotKeyCenter.shared.start { [weak self] action, isPressed in
+            self?.handleHotKey(action, isPressed: isPressed)
         }
     }
 
-    func handleHotKey(_ action: ShortcutAction) {
+    func handleHotKey(_ action: ShortcutAction, isPressed: Bool) {
+        if action == .walkie {
+            handleWalkieKey(isPressed: isPressed)
+            return
+        }
+        
+        guard isPressed else { return }
+        
         switch action {
         case .toggleIsland:
             if state.mode == .expanded {
@@ -537,6 +547,44 @@ final class IslandWindowController: NSWindowController {
                 expand(to: .wardrobe)
             }
         }
+    }
+
+    private func handleWalkieKey(isPressed: Bool) {
+        let nowMS = Int64(Date().timeIntervalSince1970 * 1000)
+        
+        if isPressed {
+            if let event = walkieClassifier.keyDown(at: nowMS) {
+                postWalkieEvent(event)
+            }
+            walkieCheckTimer?.invalidate()
+            walkieCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                if let e = self.walkieClassifier.checkHoldThreshold(at: now) {
+                    self.postWalkieEvent(e)
+                }
+                if let e = self.walkieClassifier.checkTapTimeout(at: now) {
+                    self.postWalkieEvent(e)
+                    self.walkieCheckTimer?.invalidate()
+                    self.walkieCheckTimer = nil
+                }
+            }
+        } else {
+            if let event = walkieClassifier.keyUp(at: nowMS) {
+                postWalkieEvent(event)
+            }
+        }
+    }
+
+    private func postWalkieEvent(_ event: WalkieGestureClassifier.Event) {
+        let name: Notification.Name
+        switch event {
+        case .pttDown:   name = .walkiePTTDown
+        case .pttUp:     name = .walkiePTTUp
+        case .doubleTap: name = .walkieDoubleTap
+        case .tap:       name = .walkieTap
+        }
+        NotificationCenter.default.post(name: name, object: nil)
     }
 
     // MARK: - Island-local shortcuts
@@ -1267,6 +1315,11 @@ extension Notification.Name {
     static let greetingHover    = Notification.Name("notchBuddy.greetingHover")
     static let greetingInterrupt = Notification.Name("notchBuddy.greetingInterrupt")
     static let openWardrobeFromDesktop = Notification.Name("notchBuddy.openWardrobeFromDesktop")
+    // Walkie-talkie gestures
+    static let walkiePTTDown    = Notification.Name("notchBuddy.walkiePTTDown")
+    static let walkiePTTUp      = Notification.Name("notchBuddy.walkiePTTUp")
+    static let walkieDoubleTap  = Notification.Name("notchBuddy.walkieDoubleTap")
+    static let walkieTap        = Notification.Name("notchBuddy.walkieTap")
     // Island moved to another screen (resting size may differ: notch vs bar)
     static let islandScreenChanged = Notification.Name("notchBuddy.islandScreenChanged")
 }

@@ -9,7 +9,7 @@ import Carbon.HIToolbox
 
 private nonisolated(unsafe) var gHotKeyHandler: EventHandlerRef? = nil
 private nonisolated(unsafe) var gHotKeyTable: [UInt32: ShortcutAction] = [:]
-private nonisolated(unsafe) var gOnAction: ((ShortcutAction) -> Void)? = nil
+private nonisolated(unsafe) var gOnAction: ((ShortcutAction, Bool) -> Void)? = nil
 
 private func coucouHotKeyEventHandler(
     _: EventHandlerCallRef?,
@@ -17,6 +17,12 @@ private func coucouHotKeyEventHandler(
     _: UnsafeMutableRawPointer?
 ) -> OSStatus {
     guard let event else { return OSStatus(eventNotHandledErr) }
+    
+    var kind = UInt32(0)
+    GetEventParameter(event, EventParamName(kEventParamKeyboardEventType),
+                      EventParamType(typeUInt32), nil, MemoryLayout<UInt32>.size, nil, &kind)
+    let isPressed = (kind == UInt32(kEventHotKeyPressed))
+    
     var hkid = EventHotKeyID()
     let err = GetEventParameter(
         event,
@@ -31,7 +37,7 @@ private func coucouHotKeyEventHandler(
         return OSStatus(eventNotHandledErr)
     }
     // Carbon events are dispatched on the main thread.
-    MainActor.assumeIsolated { gOnAction?(action) }
+    MainActor.assumeIsolated { gOnAction?(action, isPressed) }
     return noErr
 }
 
@@ -60,18 +66,20 @@ final class HotKeyCenter {
 
     /// Start the hot-key engine and fire `onAction` whenever the user presses a registered shortcut.
     /// Safe to call more than once — the handler is installed only once.
-    func start(onAction: @escaping @MainActor (ShortcutAction) -> Void) {
+    func start(onAction: @escaping @MainActor (ShortcutAction, Bool) -> Void) {
         gOnAction = onAction
 
         if gHotKeyHandler == nil {
-            var spec = EventTypeSpec(
-                eventClass: OSType(kEventClassKeyboard),
-                eventKind:  UInt32(kEventHotKeyPressed)
-            )
+            var specs = [
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                              eventKind: UInt32(kEventHotKeyPressed)),
+                EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                              eventKind: UInt32(kEventHotKeyReleased))
+            ]
             InstallEventHandler(
                 GetApplicationEventTarget(),
                 coucouHotKeyEventHandler,
-                1, &spec,
+                2, &specs,
                 nil, &gHotKeyHandler
             )
         }
