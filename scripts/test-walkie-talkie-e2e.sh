@@ -33,21 +33,28 @@ import Foundation
 
 actor WalkieProtocolClient {
     let serverURL: String
-    let accessCode: String
+    let channelToken: String
     var sessionID: String?
     var sessionToken: String?
     var revision: Int = 0
     var currentSSEEvent: String?
     
-    init(serverURL: String, accessCode: String) {
+    init(serverURL: String, accessCode: String) throws {
         self.serverURL = serverURL
-        self.accessCode = accessCode
+        
+        // Decode access code to extract the token
+        guard let decoded = Data(base64Encoded: accessCode.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/"), options: .ignoreUnknownCharacters),
+              let json = try? JSONSerialization.jsonObject(with: decoded) as? [String: Any],
+              let token = json["token"] as? String else {
+            throw TestError.invalidAccessCode
+        }
+        self.channelToken = token
     }
     
     func connect() async throws -> (sessionID: String, member: String) {
         let url = URL(string: "\(serverURL)/v3/channels/1/events")!
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessCode)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(channelToken)", forHTTPHeaderField: "Authorization")
         
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         
@@ -223,6 +230,7 @@ actor WalkieProtocolClient {
 }
 
 enum TestError: Error {
+    case invalidAccessCode
     case invalidResponse
     case httpError(Int)
     case channelFull
@@ -250,12 +258,12 @@ struct E2ETest {
             print("✓ Starting E2E test")
             
             // Client A joins
-            let clientA = WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientA = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
             let (sidA, memberA) = try await clientA.connect()
             print("✓ Client A joined: session=\(sidA), member=\(memberA)")
             
             // Client B joins
-            let clientB = WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientB = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
             let (sidB, memberB) = try await clientB.connect()
             print("✓ Client B joined: session=\(sidB), member=\(memberB)")
             
@@ -315,17 +323,17 @@ struct E2ETest {
             print("✓ Client B left")
             
             // Third client should succeed now (channel has room)
-            let clientC = WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientC = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
             let (sidC, memberC) = try await clientC.connect()
             print("✓ Client C joined: session=\(sidC), member=\(memberC)")
             
             // Fourth client joins
-            let clientD = WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientD = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
             let (sidD, memberD) = try await clientD.connect()
             print("✓ Client D joined: session=\(sidD), member=\(memberD)")
             
             // Fifth client should get 409 (channel full)
-            let clientE = WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
+            let clientE = try WalkieProtocolClient(serverURL: serverURL, accessCode: accessCode)
             do {
                 _ = try await clientE.connect()
                 print("❌ Client E should have received 409 but connected successfully")
