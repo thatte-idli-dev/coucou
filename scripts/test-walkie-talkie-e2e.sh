@@ -79,10 +79,11 @@ actor WalkieProtocolClient {
                     
                     var lineCount = 0
                     var hasResumed = false
+                    var localEvent: String?
                     for try await line in bytes.lines {
                         lineCount += 1
                         if line.hasPrefix("event: ") {
-                            await MainActor.run { currentSSEEvent = String(line.dropFirst(7)) }
+                            localEvent = String(line.dropFirst(7))
                         } else if line.hasPrefix("data: ") {
                             let json = String(line.dropFirst(6))
                             guard let data = json.data(using: .utf8),
@@ -90,8 +91,7 @@ actor WalkieProtocolClient {
                                 continue
                             }
                             
-                            let event = await MainActor.run { currentSSEEvent }
-                            if event == "snapshot" && !hasResumed {
+                            if localEvent == "snapshot" && !hasResumed {
                                 guard let token = dict["session_token"] as? String,
                                       let eventDict = dict["event"] as? [String: Any],
                                       let sid = eventDict["session_id"] as? String,
@@ -101,11 +101,7 @@ actor WalkieProtocolClient {
                                     return
                                 }
                                 
-                                await MainActor.run {
-                                    sessionID = sid
-                                    sessionToken = token
-                                    revision = 0
-                                }
+                                await self.setSession(id: sid, token: token)
                                 
                                 continuation.resume(returning: (sid, member))
                                 hasResumed = true
@@ -124,6 +120,12 @@ actor WalkieProtocolClient {
                 }
             }
         }
+    }
+    
+    private func setSession(id: String, token: String) {
+        self.sessionID = id
+        self.sessionToken = token
+        self.revision = 0
     }
     
     func sendPresence(tuned: Bool) async throws {
