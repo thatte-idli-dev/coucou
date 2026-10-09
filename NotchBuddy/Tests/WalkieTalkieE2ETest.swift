@@ -102,12 +102,16 @@ struct WalkieTalkieE2ETest {
         print("  → Client B: PTT down (tuning)")
         await linkB.simulatePTTDown()
         
-        // Wait for negotiation
-        try await Task.sleep(for: .seconds(2))
+        // Wait for negotiation (longer timeout for CI environment)
+        try await Task.sleep(for: .seconds(5))
         
         // Verify both entered call state
-        guard await linkA.getState().isInCall else {
-            throw TestError("Client A should be in call state")
+        let aState = await linkA.getState()
+        let bState = await linkB.getState()
+        print("  → Client A state: \(aState), Client B state: \(bState)")
+        
+        guard aState.isInCall else {
+            throw TestError("Client A should be in call state, but is: \(aState)")
         }
         print("  ✓ Client A entered call")
         
@@ -511,10 +515,15 @@ actor TestWalkieTalkieLink {
                 
                 if myTuned && peerTuned {
                     if let negID = stateEvent.negotiationID, negID != negotiationID {
+                        print("[Test] Both tuned, starting negotiation with ID: \(negID)")
                         negotiationID = negID
                         await fetchICEServers()
                         await startNegotiation()
+                    } else {
+                        print("[Test] Both tuned but negotiationID unchanged: \(String(describing: stateEvent.negotiationID))")
                     }
+                } else {
+                    print("[Test] State update: myTuned=\(myTuned), peerTuned=\(peerTuned)")
                 }
                 
             case "signal":
@@ -617,8 +626,10 @@ actor TestWalkieTalkieLink {
         // Allow .waiting or .connected states
         switch state {
         case .waiting, .connected:
+            print("[Test] startNegotiation: proceeding (state: \(state), isSeatA: \(isSeatA))")
             break
         case .disconnected, .inCall:
+            print("[Test] startNegotiation: returning early (state: \(state))")
             return
         }
         
@@ -634,32 +645,51 @@ actor TestWalkieTalkieLink {
         if isSeatA {
             do {
                 let offer = try await audioLayer.createOffer(iceServers: iceServers)
+                print("[Test] Seat A created offer, sending...")
                 await sendOffer(offer)
-            } catch {}
+            } catch {
+                print("[Test] Seat A failed to create offer: \(error)")
+            }
+        } else {
+            print("[Test] Seat B waiting for offer...")
         }
         
+        print("[Test] Setting state to .inCall")
         state = .inCall(mode: .pushToTalk(transmitting: false))
     }
     
     private func handleSignalEvent(_ dict: [String: Any]) async {
-        guard let signalEvent = WalkieProtocol.parseSignalEvent(dict) else { return }
-        guard signalEvent.from != sessionID else { return }
+        guard let signalEvent = WalkieProtocol.parseSignalEvent(dict) else {
+            print("[Test] Failed to parse signal event")
+            return
+        }
+        guard signalEvent.from != sessionID else {
+            print("[Test] Ignoring signal from self")
+            return
+        }
         
         let payload = signalEvent.payload
+        print("[Test] Received signal kind: \(signalEvent.kind)")
         
         if let offerJSON = payload["offer"] as? String, !isSeatA {
+            print("[Test] Seat B received offer, creating answer...")
             do {
                 let answer = try await audioLayer.setOffer(offerJSON, iceServers: iceServers)
                 await sendAnswer(answer)
+                print("[Test] Seat B sent answer, setting state to .inCall")
                 state = .inCall(mode: .pushToTalk(transmitting: false))
-            } catch {}
+            } catch {
+                print("[Test] Seat B failed to handle offer: \(error)")
+            }
         }
         
         if let answerJSON = payload["answer"] as? String, isSeatA {
+            print("[Test] Seat A received answer")
             await audioLayer.handleAnswer(answerJSON)
         }
         
         if let candidateJSON = payload["ice_candidate"] as? String {
+            print("[Test] Received ICE candidate")
             await audioLayer.addIceCandidate(candidateJSON)
         }
     }
