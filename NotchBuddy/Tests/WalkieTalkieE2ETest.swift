@@ -3,6 +3,29 @@ import Foundation
 import FoundationNetworking
 #endif
 
+// Mirror WalkieState from WalkieTalkieLink for standalone compilation
+enum WalkieState: Equatable, Sendable {
+    case disconnected
+    case connected(tuned: Bool)
+    case waiting(started: Date)
+    case inCall(mode: CallMode)
+    
+    enum CallMode: Equatable, Sendable {
+        case pushToTalk(transmitting: Bool)
+        case handsFree
+    }
+    
+    var isWaiting: Bool {
+        if case .waiting = self { return true }
+        return false
+    }
+    
+    var isInCall: Bool {
+        if case .inCall = self { return true }
+        return false
+    }
+}
+
 @main
 struct WalkieTalkieE2ETest {
     static func main() async {
@@ -177,14 +200,16 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .seconds(1))
         
         // A should be disconnected/untuned
-        guard !await linkA.getState().isInCall else {
+        let aState = await linkA.getState()
+        guard !aState.isInCall else {
             throw TestError("Client A should have hung up")
         }
         print("  ✓ Client A hung up and untuned")
         
         // B should also drop the call when peer untuned
         try await Task.sleep(for: .seconds(1))
-        guard !await linkB.getState().isInCall else {
+        let bState = await linkB.getState()
+        guard !bState.isInCall else {
             throw TestError("Client B should have dropped call when peer left")
         }
         print("  ✓ Client B dropped call when peer left")
@@ -229,7 +254,8 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // A should be untuned
-        guard !await linkA.getState().isWaiting else {
+        let stateAfterTap = await linkA.getState()
+        guard !stateAfterTap.isWaiting else {
             throw TestError("Client A should have cancelled waiting")
         }
         print("  ✓ Client A cancelled and untuned")
@@ -269,7 +295,8 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .seconds(2.5))
         
         // A should have timed out and untuned
-        guard !await linkA.getState().isWaiting else {
+        let stateAfterTimeout = await linkA.getState()
+        guard !stateAfterTimeout.isWaiting else {
             throw TestError("Client A should have timed out")
         }
         print("  ✓ Client A timed out and untuned")
@@ -398,7 +425,7 @@ actor TestWalkieTalkieLink {
         await startEventStream(serverURL: components.origin, channelToken: components.channelToken)
     }
     
-    func getState() -> WalkieState {
+    func getState() async -> WalkieState {
         return state
     }
     
@@ -727,18 +754,6 @@ actor TestWalkieTalkieLink {
 }
 
 // MARK: - Extensions
-
-extension WalkieState {
-    var isWaiting: Bool {
-        if case .waiting = self { return true }
-        return false
-    }
-    
-    var isInCall: Bool {
-        if case .inCall = self { return true }
-        return false
-    }
-}
 
 extension FakeAudioLayer {
     private static var lastICEServers: [[String: Any]] = []
