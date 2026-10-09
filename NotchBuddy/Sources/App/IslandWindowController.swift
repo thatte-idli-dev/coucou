@@ -1302,6 +1302,11 @@ extension Notification.Name {
     static let botSetTgEs       = Notification.Name("notchBuddy.botSetTgEs")
     static let botGulp          = Notification.Name("notchBuddy.botGulp")
     static let botMorphTo       = Notification.Name("notchBuddy.botMorphTo")
+    
+    static let walkiePTTDown    = Notification.Name("notchBuddy.walkiePTTDown")
+    static let walkiePTTUp      = Notification.Name("notchBuddy.walkiePTTUp")
+    static let walkieDoubleTap  = Notification.Name("notchBuddy.walkieDoubleTap")
+    static let walkieTap        = Notification.Name("notchBuddy.walkieTap")
     static let islandAction     = Notification.Name("notchBuddy.islandAction")
     static let islandCollapse      = Notification.Name("notchBuddy.islandCollapse")
     static let islandSendMessage   = Notification.Name("notchBuddy.islandSendMessage")

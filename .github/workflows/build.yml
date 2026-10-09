@@ -75,6 +75,9 @@ jobs:
       - name: Claude settings file tests
         run: bash scripts/test-claude-settings.sh
 
+      - name: Walkie-talkie state tests
+        run: bash scripts/test-walkie-talkie-state.sh
+
       - name: Build
         run: |
           xcodebuild \

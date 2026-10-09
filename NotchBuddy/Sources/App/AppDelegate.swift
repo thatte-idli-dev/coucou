@@ -23,6 +23,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         let debugMenu = NSMenu(title: "Debug")
         debugMenu.addItem(NSMenuItem(title: "Render recap image", action: #selector(renderRecapImage), keyEquivalent: ""))
+        
+        let walkieMenu = NSMenu(title: "Walkie-Talkie")
+        walkieMenu.addItem(NSMenuItem(title: "PTT Down", action: #selector(debugWalkiePTTDown), keyEquivalent: ""))
+        walkieMenu.addItem(NSMenuItem(title: "PTT Up", action: #selector(debugWalkiePTTUp), keyEquivalent: ""))
+        walkieMenu.addItem(NSMenuItem(title: "Double Tap", action: #selector(debugWalkieDoubleTap), keyEquivalent: ""))
+        walkieMenu.addItem(NSMenuItem(title: "Single Tap", action: #selector(debugWalkieTap), keyEquivalent: ""))
+        let walkieMenuItem = NSMenuItem(title: "Walkie-Talkie", action: nil, keyEquivalent: "")
+        walkieMenuItem.submenu = walkieMenu
+        debugMenu.addItem(walkieMenuItem)
+        
         let debugMenuItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
         debugMenuItem.submenu = debugMenu
         NSApp.mainMenu?.addItem(debugMenuItem)
@@ -128,6 +138,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Debug helpers
 
     #if DEBUG
+    @objc func debugWalkiePTTDown() {
+        NotificationCenter.default.post(name: .walkiePTTDown, object: nil)
+    }
+    
+    @objc func debugWalkiePTTUp() {
+        NotificationCenter.default.post(name: .walkiePTTUp, object: nil)
+    }
+    
+    @objc func debugWalkieDoubleTap() {
+        NotificationCenter.default.post(name: .walkieDoubleTap, object: nil)
+    }
+    
+    @objc func debugWalkieTap() {
+        NotificationCenter.default.post(name: .walkieTap, object: nil)
+    }
+    
     @objc func renderRecapImage() {
         let summary = RecapStore.shared.weeklySummary() ?? WeeklySummary(
             weekStart: Date(), weekEnd: Date(),
@@ -215,6 +241,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = MusicController.shared
         _ = SpotifyController.shared
         #endif
+        
+        Task {
+            let serverURL = Keychain.load(key: "walkie-server-url")
+            let accessCode = Keychain.load(key: "walkie-access-code")
+            await WalkieTalkieLink.shared.configure(serverURL: serverURL, accessCode: accessCode)
+        }
     }
 }
 
