@@ -15,8 +15,9 @@ cd "$TEMP_DIR"
 ./talky-server init --config=config.json --origin=https://test.local > channels.txt
 
 # Add TURN config and patch origin for local testing
-python3 -c "
+python3 << 'PYTHON_EOF'
 import json, base64
+
 with open('config.json', 'r') as f:
     config = json.load(f)
 config['origin'] = 'http://127.0.0.1:8080'
@@ -40,16 +41,19 @@ with open('channels.txt', 'w') as f:
             if code_index >= 0:
                 code = parts[code_index]
                 try:
-                    decoded = base64.b64decode(code + '==', validate=True)
+                    # Add padding if needed
+                    padding = (4 - len(code) % 4) % 4
+                    padded = code + '=' * padding
+                    decoded = base64.b64decode(padded)
                     data = json.loads(decoded)
                     data['origin'] = 'http://127.0.0.1:8080'
-                    encoded = base64.b64encode(json.dumps(data).encode()).decode().rstrip('=')
+                    encoded = base64.urlsafe_b64encode(json.dumps(data).encode()).decode().rstrip('=')
                     parts[code_index] = encoded
                     line = ' '.join(parts) + '\n'
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Failed to patch code: {e}")
         f.write(line)
-"
+PYTHON_EOF
 
 echo "→ Extracting channel 1 access code"
 ACCESS_CODE=$(grep "Channel 1:" channels.txt | awk '{print $3}')
