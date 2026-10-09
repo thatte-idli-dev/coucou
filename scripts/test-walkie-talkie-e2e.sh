@@ -5,35 +5,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
-echo "→ Cloning thatte-idli-dev/Talky-Talky"
+echo "→ Building vendored Talky-Talky server"
+cd "$SCRIPT_DIR/../tests/talky-server"
+go build -o "$TEMP_DIR/talky-server" .
+
+echo "→ Initializing server config"
 cd "$TEMP_DIR"
+./talky-server init --config=config.json --origin=https://test.local > channels.txt
 
-# Use GITHUB_TOKEN if available (in CI), otherwise use standard https
-if [ -n "$GITHUB_TOKEN" ]; then
-    git clone "https://x-access-token:${GITHUB_TOKEN}@github.com/thatte-idli-dev/Talky-Talky.git"
-else
-    git clone https://github.com/thatte-idli-dev/Talky-Talky.git
-fi
-
-cd Talky-Talky/server
-
-echo "→ Building Talky-Talky server"
-go build -o talky-server .
-
-echo "→ Starting server in background"
-./talky-server &
-SERVER_PID=$!
-trap "kill $SERVER_PID 2>/dev/null || true; rm -rf $TEMP_DIR" EXIT
-
-sleep 2
-
-echo "→ Minting local test access code"
-ACCESS_CODE=$(curl -s -X POST http://localhost:8080/v3/channels/1/access | jq -r '.access_code')
+echo "→ Extracting channel 1 access code"
+ACCESS_CODE=$(grep "Channel 1:" channels.txt | awk '{print $3}')
 if [ -z "$ACCESS_CODE" ] || [ "$ACCESS_CODE" == "null" ]; then
     echo "❌ Failed to mint access code"
     exit 1
 fi
 echo "   Access code: $ACCESS_CODE"
+
+echo "→ Starting server in background"
+./talky-server serve --config=config.json --listen=127.0.0.1:8080 &
+SERVER_PID=$!
+trap "kill $SERVER_PID 2>/dev/null || true; rm -rf $TEMP_DIR" EXIT
+
+sleep 2
 
 cat > "$TEMP_DIR/e2e_test.swift" << 'SWIFT_EOF'
 import Foundation
