@@ -38,6 +38,7 @@ actor WalkieProtocolClient {
     var sessionToken: String?
     var revision: Int = 0
     var currentSSEEvent: String?
+    var streamTask: Task<Void, Never>?
     
     init(serverURL: String, accessCode: String) throws {
         self.serverURL = serverURL
@@ -56,54 +57,73 @@ actor WalkieProtocolClient {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(channelToken)", forHTTPHeaderField: "Authorization")
         
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        
-        guard let httpResp = response as? HTTPURLResponse else {
-            throw TestError.invalidResponse
-        }
-        
-        if httpResp.statusCode == 409 {
-            throw TestError.channelFull
-        }
-        
-        guard httpResp.statusCode == 200 else {
-            throw TestError.httpError(httpResp.statusCode)
-        }
-        
-        var lineCount = 0
-        for try await line in bytes.lines {
-            lineCount += 1
-            if line.hasPrefix("event: ") {
-                currentSSEEvent = String(line.dropFirst(7))
-            } else if line.hasPrefix("data: ") {
-                let json = String(line.dropFirst(6))
-                guard let data = json.data(using: .utf8),
-                      let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    continue
-                }
-                
-                if currentSSEEvent == "snapshot" {
-                    guard let token = dict["session_token"] as? String,
-                          let event = dict["event"] as? [String: Any],
-                          let sid = event["session_id"] as? String,
-                          let member = event["member"] as? String else {
-                        throw TestError.invalidJoinEvent
+        return try await withCheckedThrowingContinuation { continuation in
+            streamTask = Task {
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    
+                    guard let httpResp = response as? HTTPURLResponse else {
+                        continuation.resume(throwing: TestError.invalidResponse)
+                        return
                     }
                     
-                    sessionID = sid
-                    sessionToken = token
-                    revision = 0
+                    if httpResp.statusCode == 409 {
+                        continuation.resume(throwing: TestError.channelFull)
+                        return
+                    }
                     
-                    return (sid, member)
+                    guard httpResp.statusCode == 200 else {
+                        continuation.resume(throwing: TestError.httpError(httpResp.statusCode))
+                        return
+                    }
+                    
+                    var lineCount = 0
+                    var hasResumed = false
+                    for try await line in bytes.lines {
+                        lineCount += 1
+                        if line.hasPrefix("event: ") {
+                            await MainActor.run { currentSSEEvent = String(line.dropFirst(7)) }
+                        } else if line.hasPrefix("data: ") {
+                            let json = String(line.dropFirst(6))
+                            guard let data = json.data(using: .utf8),
+                                  let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                                continue
+                            }
+                            
+                            let event = await MainActor.run { currentSSEEvent }
+                            if event == "snapshot" && !hasResumed {
+                                guard let token = dict["session_token"] as? String,
+                                      let eventDict = dict["event"] as? [String: Any],
+                                      let sid = eventDict["session_id"] as? String,
+                                      let member = eventDict["member"] as? String else {
+                                    continuation.resume(throwing: TestError.invalidJoinEvent)
+                                    hasResumed = true
+                                    return
+                                }
+                                
+                                await MainActor.run {
+                                    sessionID = sid
+                                    sessionToken = token
+                                    revision = 0
+                                }
+                                
+                                continuation.resume(returning: (sid, member))
+                                hasResumed = true
+                                // Keep reading to maintain connection
+                            }
+                        }
+                        
+                        if lineCount > 100 && !hasResumed {
+                            continuation.resume(throwing: TestError.noJoinEvent)
+                            hasResumed = true
+                            return
+                        }
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
                 }
             }
-            
-            if lineCount > 20 {
-                throw TestError.noJoinEvent
-            }
         }
-        
-        throw TestError.noJoinEvent
     }
     
     func sendPresence(tuned: Bool) async throws {
@@ -219,10 +239,12 @@ actor WalkieProtocolClient {
         
         let (_, response) = try await URLSession.shared.data(for: req)
         guard let httpResp = response as? HTTPURLResponse,
-              httpResp.statusCode == 200 else {
+              httpResp.statusCode == 200 || httpResp.statusCode == 204 else {
             throw TestError.leaveFailed
         }
         
+        streamTask?.cancel()
+        streamTask = nil
         self.sessionID = nil
         self.sessionToken = nil
         self.revision = 0
