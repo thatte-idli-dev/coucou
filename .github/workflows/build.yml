@@ -83,6 +83,14 @@ jobs:
       - name: Walkie-talkie protocol tests
         run: bash scripts/test-walkie-talkie-protocol.sh
 
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Walkie-talkie E2E signaling test
+        run: bash scripts/test-walkie-talkie-e2e.sh
+
       - name: Build
         run: |
           xcodebuild \
