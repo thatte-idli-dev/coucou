@@ -1,5 +1,8 @@
 import Foundation
 import AppKit
+import os.log
+
+private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "WalkieTalkieLink")
 
 enum WalkieState: Equatable, Sendable {
     case disconnected
@@ -23,19 +26,28 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var negotiationID: String?
     private var isSeatA: Bool = false
     private var peerTuned: Bool = false
+    private var channelNumber: Int = 1
     
     private var eventTask: Task<Void, Never>?
     private var presenceTask: Task<Void, Never>?
     private var waitingTimer: Task<Void, Never>?
     private var iceRefreshTimer: Task<Void, Never>?
+    private var streamHealthTimer: Task<Void, Never>?
     
-    private var iceServers: [[String: String]] = []
+    private var iceServers: [[String: Any]] = []
     private var serverURL: String?
     private var channelToken: String?
     private var channelFull: Bool = false
+    private var lastEventTime: Date = Date()
+    private var reconnectAttempts: Int = 0
     
     private var waitingAnimationToken: NSObject?
     private var currentSSEEvent: String?
+    private var hasPlayedGreet: Bool = false
+    
+    private var audioLayer: WalkieAudioLayer = WalkieTalkieAudio.shared
+    
+    var waitingTimeout: TimeInterval = 30  // Injectable for tests
     
     private init() {
         NotificationCenter.default.addObserver(
@@ -71,6 +83,11 @@ final class WalkieTalkieLink: @unchecked Sendable {
         }
     }
     
+    // For testing
+    func _setAudioLayer(_ layer: WalkieAudioLayer) {
+        self.audioLayer = layer
+    }
+    
     func configure(serverURL: String?, accessCode: String?) async {
         guard let code = accessCode, !code.isEmpty else {
             self.serverURL = nil
@@ -86,6 +103,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         self.serverURL = components.origin
         self.channelToken = components.channelToken
+        self.channelNumber = components.channel
         
         await connectIfNeeded()
     }
@@ -96,8 +114,10 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         channelFull = false
         state = .connected(tuned: false)
+        reconnectAttempts = 0
         
         await startEventStream()
+        await startStreamHealthMonitor()
     }
     
     private func startEventStream() async {
@@ -106,7 +126,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         guard let serverURL, let channelToken else { return }
         
         let baseURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let urlStr = "\(baseURL)/v3/channels/1/events"
+        let urlStr = "\(baseURL)/v3/channels/\(channelNumber)/events"
         guard let url = URL(string: urlStr) else { return }
         
         var request = URLRequest(url: url)
@@ -123,21 +143,80 @@ final class WalkieTalkieLink: @unchecked Sendable {
                             await disconnect()
                             return
                         }
+                        
+                        if httpResp.statusCode == 401 {
+                            logger.error("Authentication failed")
+                            await disconnect()
+                            return
+                        }
+                        
                         guard httpResp.statusCode == 200 else {
-                            try? await Task.sleep(for: .seconds(5))
+                            try? await Task.sleep(for: .seconds(reconnectBackoff()))
                             continue
                         }
                     }
                     
+                    reconnectAttempts = 0
+                    lastEventTime = Date()
+                    
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
+                        lastEventTime = Date()
                         await handleSSELine(line)
+                    }
+                    
+                    // Stream ended, reconnect
+                    if !Task.isCancelled {
+                        logger.warning("SSE stream ended, reconnecting...")
+                        try? await Task.sleep(for: .seconds(reconnectBackoff()))
                     }
                 } catch {
                     if Task.isCancelled { break }
-                    try? await Task.sleep(for: .seconds(5))
+                    logger.error("SSE error: \(error.localizedDescription)")
+                    try? await Task.sleep(for: .seconds(reconnectBackoff()))
                 }
             }
+        }
+    }
+    
+    private func reconnectBackoff() -> Int {
+        reconnectAttempts += 1
+        let backoffs = [1, 2, 4, 8, 30]
+        return backoffs[min(reconnectAttempts - 1, backoffs.count - 1)]
+    }
+    
+    private func startStreamHealthMonitor() async {
+        streamHealthTimer?.cancel()
+        
+        streamHealthTimer = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(35))
+                if Date().timeIntervalSince(lastEventTime) > 35 {
+                    logger.warning("Stream dead for 35s, reconnecting...")
+                    await reconnect()
+                }
+            }
+        }
+    }
+    
+    private func reconnect() async {
+        logger.info("Reconnecting...")
+        
+        // Reset state per protocol rules
+        let wasConnected = state != .disconnected
+        sessionID = nil
+        sessionToken = nil
+        revision = 0
+        negotiationID = nil
+        peerTuned = false
+        hasPlayedGreet = false
+        
+        await audioLayer.cleanup()
+        
+        if wasConnected {
+            state = .disconnected
+            state = .connected(tuned: false)
+            await startEventStream()
         }
     }
     
@@ -163,11 +242,14 @@ final class WalkieTalkieLink: @unchecked Sendable {
             case "state":
                 guard let stateEvent = WalkieProtocol.parseStateEvent(dict) else { return }
                 let myTuned = isLocallyTuned()
+                let wasPeerTuned = peerTuned
                 peerTuned = stateEvent.peerTuned
                 
                 if myTuned && peerTuned {
+                    // Both tuned - start or continue call
                     if case .waiting = state {
-                        await stopWaitingAnimation()
+                        waitingTimer?.cancel()
+                        waitingTimer = nil
                     }
                     
                     if let negID = stateEvent.negotiationID, negID != negotiationID {
@@ -175,15 +257,23 @@ final class WalkieTalkieLink: @unchecked Sendable {
                         await fetchICEServers()
                         await startNegotiation()
                     }
+                    
+                    // Play greet only on actual peer tune transition
+                    if !wasPeerTuned {
+                        await playGreetOnce()
+                    }
                 } else if myTuned && !peerTuned {
+                    // Peer left
                     if case .inCall = state {
                         await endCall()
                     }
                 } else if !myTuned && peerTuned {
+                    // Peer is waiting
                     if case .connected = state {
                         await startWaitingAnimation()
                     }
                 } else {
+                    // Both untuned
                     if case .waiting = state {
                         await stopWaitingAnimation()
                     }
@@ -242,7 +332,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
         
-        let urlStr = "\(serverURL)/v3/channels/1/presence"
+        let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/presence"
         guard let url = URL(string: urlStr) else { return }
         
         var req = URLRequest(url: url)
@@ -251,38 +341,59 @@ final class WalkieTalkieLink: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
-        _ = try? await URLSession.shared.data(for: req)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            if let httpResp = response as? HTTPURLResponse {
+                if httpResp.statusCode == 401 || httpResp.statusCode == 409 {
+                    logger.error("Presence failed with \(httpResp.statusCode), reconnecting...")
+                    await reconnect()
+                }
+            }
+        } catch {
+            logger.error("Presence failed: \(error.localizedDescription)")
+        }
     }
     
     private func startNegotiation() async {
-        guard case .connected = state else { return }
+        // Allow .waiting state - user is PTT-holding
+        guard case .connected = state else if case .waiting = state {} else { return }
         guard peerTuned else { return }
         
-        let hasPermission = await WalkieTalkieAudio.shared.checkMicPermission()
+        let hasPermission = await audioLayer.checkMicPermission()
         guard hasPermission else {
             await showMicPermissionAlert()
             return
         }
         
-        await MainActor.run {
-            WalkieTalkieAudio.shared.setupWebView(
-                onIceCandidate: { [weak self] candidate in
-                    Task { await self?.sendIceCandidate(candidate) }
-                },
-                onAnswer: { [weak self] answer in
-                    Task { await self?.sendAnswer(answer) }
-                }
-            )
+        let micEnabled = if case .inCall(.pushToTalk(let t)) = state {
+            t
+        } else if case .waiting = state {
+            true
+        } else {
+            false
         }
+        
+        await audioLayer.setupWebView(
+            onIceCandidate: { [weak self] candidate in
+                Task { await self?.sendIceCandidate(candidate) }
+            },
+            onAnswer: { [weak self] answer in
+                Task { await self?.sendAnswer(answer) }
+            }
+        )
+        
+        await audioLayer.setMicEnabled(micEnabled)
         
         if isSeatA {
             do {
-                let offer = try await WalkieTalkieAudio.shared.createOffer(iceServers: iceServers)
+                let offer = try await audioLayer.createOffer(iceServers: iceServers)
                 await sendOffer(offer)
-            } catch {}
+            } catch {
+                logger.error("createOffer failed: \(error.localizedDescription)")
+            }
         }
         
-        state = .inCall(mode: .pushToTalk(transmitting: false))
+        state = .inCall(mode: .pushToTalk(transmitting: micEnabled))
         await stopWaitingAnimation()
         NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
     }
@@ -293,23 +404,58 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         let payload = signalEvent.payload
         
-        if let offerJSON = payload["offer"] as? String, !isSeatA {
+        // Accept both wrapped and standard SDP formats
+        var offerJSON: String?
+        var answerJSON: String?
+        
+        // Check for wrapped format: {offer: "..."}
+        if let wrapped = payload["offer"] as? String {
+            offerJSON = wrapped
+        }
+        // Check for standard format: {type: "offer", sdp: "..."}
+        else if let type = payload["type"] as? String, type == "offer", let sdp = payload["sdp"] as? String {
+            let standardOffer = ["type": "offer", "sdp": sdp]
+            offerJSON = try? String(data: JSONSerialization.data(withJSONObject: standardOffer), encoding: .utf8)
+        }
+        
+        if let wrapped = payload["answer"] as? String {
+            answerJSON = wrapped
+        }
+        else if let type = payload["type"] as? String, type == "answer", let sdp = payload["sdp"] as? String {
+            let standardAnswer = ["type": "answer", "sdp": sdp]
+            answerJSON = try? String(data: JSONSerialization.data(withJSONObject: standardAnswer), encoding: .utf8)
+        }
+        
+        if let offerJSON, !isSeatA {
             do {
-                let answer = try await WalkieTalkieAudio.shared.setOffer(offerJSON, iceServers: iceServers)
+                await fetchICEServers()
+                let answer = try await audioLayer.setOffer(offerJSON, iceServers: iceServers)
                 await sendAnswer(answer)
-            } catch {}
-        }
-        
-        if let answerJSON = payload["answer"] as? String, isSeatA {
-            await MainActor.run {
-                WalkieTalkieAudio.shared.handleAnswer(answerJSON)
+                
+                state = .inCall(mode: .pushToTalk(transmitting: false))
+                await stopWaitingAnimation()
+                NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+            } catch {
+                logger.error("handleOffer failed: \(error.localizedDescription)")
             }
         }
         
-        if let candidateJSON = payload["ice_candidate"] as? String {
-            await MainActor.run {
-                WalkieTalkieAudio.shared.addIceCandidate(candidateJSON)
-            }
+        if let answerJSON, isSeatA {
+            await audioLayer.handleAnswer(answerJSON)
+        }
+        
+        // Accept both wrapped and standard candidate formats
+        var candidateJSON: String?
+        if let wrapped = payload["ice_candidate"] as? String {
+            candidateJSON = wrapped
+        }
+        else if let candidate = payload["candidate"] as? String {
+            // Standard format already has all fields
+            candidateJSON = try? String(data: JSONSerialization.data(withJSONObject: payload), encoding: .utf8)
+        }
+        
+        if let candidateJSON {
+            await audioLayer.addIceCandidate(candidateJSON)
         }
     }
     
@@ -337,7 +483,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
         
-        let urlStr = "\(serverURL)/v3/channels/1/signal"
+        let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/signal"
         guard let url = URL(string: urlStr) else { return }
         
         var req = URLRequest(url: url)
@@ -360,23 +506,21 @@ final class WalkieTalkieLink: @unchecked Sendable {
             break
             
         case .connected(tuned: false):
-            let hasPermission = await WalkieTalkieAudio.shared.checkMicPermission()
+            let hasPermission = await audioLayer.checkMicPermission()
             guard hasPermission else {
                 await showMicPermissionAlert()
                 return
             }
             
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setupWebView(
-                    onIceCandidate: { [weak self] candidate in
-                        Task { await self?.sendIceCandidate(candidate) }
-                    },
-                    onAnswer: { [weak self] answer in
-                        Task { await self?.sendAnswer(answer) }
-                    }
-                )
-                WalkieTalkieAudio.shared.setMicEnabled(true)
-            }
+            await audioLayer.setupWebView(
+                onIceCandidate: { [weak self] candidate in
+                    Task { await self?.sendIceCandidate(candidate) }
+                },
+                onAnswer: { [weak self] answer in
+                    Task { await self?.sendAnswer(answer) }
+                }
+            )
+            await audioLayer.setMicEnabled(true)
             
             state = .waiting(started: Date())
             await sendPresence()
@@ -387,15 +531,11 @@ final class WalkieTalkieLink: @unchecked Sendable {
             if case .waiting(started: _) = state {
                 state = .waiting(started: Date())
             }
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setMicEnabled(true)
-            }
+            await audioLayer.setMicEnabled(true)
             
         case .inCall(mode: .pushToTalk):
             state = .inCall(mode: .pushToTalk(transmitting: true))
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setMicEnabled(true)
-            }
+            await audioLayer.setMicEnabled(true)
             await sendPresence()
             
         case .inCall(mode: .handsFree):
@@ -409,15 +549,11 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func handlePTTUp() async {
         switch state {
         case .waiting:
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setMicEnabled(false)
-            }
+            await audioLayer.setMicEnabled(false)
             
         case .inCall(mode: .pushToTalk):
             state = .inCall(mode: .pushToTalk(transmitting: false))
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setMicEnabled(false)
-            }
+            await audioLayer.setMicEnabled(false)
             await sendPresence()
             
         default:
@@ -436,23 +572,21 @@ final class WalkieTalkieLink: @unchecked Sendable {
             break
             
         case .connected(tuned: false):
-            let hasPermission = await WalkieTalkieAudio.shared.checkMicPermission()
+            let hasPermission = await audioLayer.checkMicPermission()
             guard hasPermission else {
                 await showMicPermissionAlert()
                 return
             }
             
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setupWebView(
-                    onIceCandidate: { [weak self] candidate in
-                        Task { await self?.sendIceCandidate(candidate) }
-                    },
-                    onAnswer: { [weak self] answer in
-                        Task { await self?.sendAnswer(answer) }
-                    }
-                )
-                WalkieTalkieAudio.shared.setMicEnabled(true)
-            }
+            await audioLayer.setupWebView(
+                onIceCandidate: { [weak self] candidate in
+                    Task { await self?.sendIceCandidate(candidate) }
+                },
+                onAnswer: { [weak self] answer in
+                    Task { await self?.sendAnswer(answer) }
+                }
+            )
+            await audioLayer.setMicEnabled(true)
             
             state = .waiting(started: Date())
             await sendPresence()
@@ -464,9 +598,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
         case .inCall(mode: .pushToTalk):
             state = .inCall(mode: .handsFree)
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setMicEnabled(true)
-            }
+            await audioLayer.setMicEnabled(true)
             await sendPresence()
             
         case .inCall(mode: .handsFree):
@@ -479,7 +611,15 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     private func handleTap() async {
         switch state {
+        case .waiting:
+            // Cancel nudge (untune)
+            await stopWaitingAnimation()
+            await audioLayer.setMicEnabled(false)
+            state = .connected(tuned: false)
+            await sendPresence()
+            
         case .inCall:
+            // Hang up
             await endCall()
             
         default:
@@ -491,7 +631,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         waitingTimer?.cancel()
         
         waitingTimer = Task {
-            try? await Task.sleep(for: .seconds(30))
+            try? await Task.sleep(for: .seconds(waitingTimeout))
             if !Task.isCancelled {
                 await waitingTimeout()
             }
@@ -502,17 +642,22 @@ final class WalkieTalkieLink: @unchecked Sendable {
         if case .waiting = state {
             await stopWaitingAnimation()
             state = .connected(tuned: false)
-            await MainActor.run {
-                WalkieTalkieAudio.shared.setMicEnabled(false)
-            }
+            await audioLayer.setMicEnabled(false)
             await sendPresence()
         }
     }
     
-    private func startWaitingAnimation() async {
-        await MainActor.run {
-            SoundEngine.shared.play("greet")
+    private func playGreetOnce() async {
+        if !hasPlayedGreet {
+            hasPlayedGreet = true
+            await MainActor.run {
+                SoundEngine.shared.play("greet")
+            }
         }
+    }
+    
+    private func startWaitingAnimation() async {
+        await playGreetOnce()
         NotificationCenter.default.post(name: .botGreet, object: nil)
         
         let token = NSObject()
@@ -548,7 +693,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func fetchICEServers() async {
         guard let serverURL, let sessionToken else { return }
         
-        let urlStr = "\(serverURL)/v3/channels/1/ice"
+        let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/ice"
         guard let url = URL(string: urlStr) else { return }
         
         var req = URLRequest(url: url)
@@ -563,22 +708,32 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
             if let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let config = WalkieProtocol.parseICEResponse(dict) {
-                var serverDict: [String: String] = [:]
-                serverDict["urls"] = config.urls.joined(separator: ",")
+                // Build proper ICE servers array with STUN + TURN
+                var servers: [[String: Any]] = []
+                
+                // Add public STUN servers
+                servers.append(["urls": ["stun:stun.l.google.com:19302"]])
+                
+                // Add TURN server with credentials
+                var turnServer: [String: Any] = ["urls": config.urls]
                 if let username = config.username {
-                    serverDict["username"] = username
+                    turnServer["username"] = username
                 }
                 if let credential = config.credential {
-                    serverDict["credential"] = credential
+                    turnServer["credential"] = credential
                 }
-                iceServers = [serverDict]
+                servers.append(turnServer)
+                
+                iceServers = servers
                 
                 // Schedule refresh before expiry
                 if let refreshAfter = config.refreshAfter {
                     await startICERefreshTimer(seconds: refreshAfter)
                 }
             }
-        } catch {}
+        } catch {
+            logger.error("fetchICEServers failed: \(error.localizedDescription)")
+        }
     }
     
     private func refreshICE() async {
@@ -589,10 +744,11 @@ final class WalkieTalkieLink: @unchecked Sendable {
         iceRefreshTimer?.cancel()
         iceRefreshTimer = nil
         
-        await MainActor.run {
-            WalkieTalkieAudio.shared.setMicEnabled(false)
-        }
+        await audioLayer.cleanup()
+        await audioLayer.setMicEnabled(false)
+        
         negotiationID = nil
+        hasPlayedGreet = false
         
         state = .connected(tuned: false)
         await sendPresence()
@@ -603,16 +759,19 @@ final class WalkieTalkieLink: @unchecked Sendable {
         presenceTask?.cancel()
         waitingTimer?.cancel()
         iceRefreshTimer?.cancel()
+        streamHealthTimer?.cancel()
         
         await stopWaitingAnimation()
+        await audioLayer.cleanup()
         
         eventTask = nil
         presenceTask = nil
         waitingTimer = nil
         iceRefreshTimer = nil
+        streamHealthTimer = nil
         
         if let serverURL, let sessionToken, let sessionID {
-            let urlStr = "\(serverURL)/v3/channels/1/session"
+            let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/session"
             if let url = URL(string: urlStr) {
                 let body = WalkieProtocol.buildLeaveBody(sessionID: sessionID)
                 guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
@@ -638,6 +797,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         revision = 0
         negotiationID = nil
         peerTuned = false
+        hasPlayedGreet = false
         
         state = .disconnected
     }
@@ -661,7 +821,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func showChannelFullAlert() {
         let alert = NSAlert()
         alert.messageText = "Channel Full"
-        alert.informativeText = "Channel 1 is currently full (2 people connected). Please try again later."
+        alert.informativeText = "Channel \(channelNumber) is currently full (2 people connected). Please try again later."
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

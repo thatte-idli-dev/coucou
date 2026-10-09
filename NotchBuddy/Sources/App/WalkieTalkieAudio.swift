@@ -2,9 +2,12 @@ import Foundation
 import AppKit
 import WebKit
 import AVFoundation
+import os.log
 
-final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @unchecked Sendable {
-    static let shared = WalkieTalkieAudio()
+private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "WalkieTalkieAudio")
+
+actor WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKScriptMessageHandler {
+    static let shared = WalkieTalkieAudioImpl()
     
     private var window: NSWindow?
     private var webView: WKWebView?
@@ -32,11 +35,6 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         config.userContentController = contentController
         
         // PRIVATE WEBKIT API: _getUserMediaRequiresFocus
-        // This is a private WebKit preference that allows getUserMedia to work
-        // without the WKWebView being in a focused window. This is acceptable
-        // for the direct NotchBuddy build (not App Store) where we need
-        // immediate mic access on hotkey press while running as LSUIElement.
-        // The alternative would be to require the stasel/WebRTC.swift package.
         if config.preferences.responds(to: Selector(("_setGetUserMediaRequiresFocus:"))) {
             config.preferences.setValue(false, forKey: "_getUserMediaRequiresFocus")
         }
@@ -64,59 +62,96 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
     }
     
     func setMicEnabled(_ enabled: Bool) {
-        webView?.evaluateJavaScript("setMicEnabled(\(enabled))") { _, _ in }
-    }
-    
-    func setOffer(_ offer: String, iceServers: [[String: String]]) async throws -> String {
-        guard let wv = webView else { throw WalkieError.notInitialized }
-        
-        let iceJSON = try! JSONSerialization.data(withJSONObject: iceServers)
-        let iceStr = String(data: iceJSON, encoding: .utf8)!
-        let offerEscaped = offer.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            wv.evaluateJavaScript("handleOffer('\(offerEscaped)', \(iceStr))") { result, error in
-                if let err = error {
-                    continuation.resume(throwing: err)
-                } else if let answer = result as? String {
-                    continuation.resume(returning: answer)
-                } else {
-                    continuation.resume(throwing: WalkieError.invalidAnswer)
-                }
+        guard let wv = webView else { return }
+        Task {
+            do {
+                try await wv.callAsyncJavaScript("setMicEnabled(enabled)", arguments: ["enabled": enabled], contentWorld: .page)
+            } catch {
+                logger.error("setMicEnabled failed: \(error.localizedDescription)")
             }
         }
     }
     
-    func createOffer(iceServers: [[String: String]]) async throws -> String {
+    func setOffer(_ offer: String, iceServers: [[String: Any]]) async throws -> String {
         guard let wv = webView else { throw WalkieError.notInitialized }
         
-        let iceJSON = try! JSONSerialization.data(withJSONObject: iceServers)
-        let iceStr = String(data: iceJSON, encoding: .utf8)!
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            wv.evaluateJavaScript("createOffer(\(iceStr))") { result, error in
-                if let err = error {
-                    continuation.resume(throwing: err)
-                } else if let offer = result as? String {
-                    continuation.resume(returning: offer)
-                } else {
-                    continuation.resume(throwing: WalkieError.invalidOffer)
-                }
+        do {
+            let result = try await wv.callAsyncJavaScript(
+                "handleOffer(offerJSON, iceServers)",
+                arguments: ["offerJSON": offer, "iceServers": iceServers],
+                contentWorld: .page
+            )
+            
+            guard let answer = result as? String else {
+                throw WalkieError.invalidAnswer
             }
+            return answer
+        } catch {
+            logger.error("handleOffer failed: \(error.localizedDescription)")
+            throw error
+        }
+    }
+    
+    func createOffer(iceServers: [[String: Any]]) async throws -> String {
+        guard let wv = webView else { throw WalkieError.notInitialized }
+        
+        do {
+            let result = try await wv.callAsyncJavaScript(
+                "createOffer(iceServers)",
+                arguments: ["iceServers": iceServers],
+                contentWorld: .page
+            )
+            
+            guard let offer = result as? String else {
+                throw WalkieError.invalidOffer
+            }
+            return offer
+        } catch {
+            logger.error("createOffer failed: \(error.localizedDescription)")
+            throw error
         }
     }
     
     func handleAnswer(_ answer: String) {
-        let escaped = answer.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-        webView?.evaluateJavaScript("handleAnswer('\(escaped)')") { _, _ in }
+        guard let wv = webView else { return }
+        Task {
+            do {
+                try await wv.callAsyncJavaScript(
+                    "handleAnswer(answerJSON)",
+                    arguments: ["answerJSON": answer],
+                    contentWorld: .page
+                )
+            } catch {
+                logger.error("handleAnswer failed: \(error.localizedDescription)")
+            }
+        }
     }
     
     func addIceCandidate(_ candidate: String) {
-        let escaped = candidate.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-        webView?.evaluateJavaScript("addIceCandidate('\(escaped)')") { _, _ in }
+        guard let wv = webView else { return }
+        Task {
+            do {
+                try await wv.callAsyncJavaScript(
+                    "addIceCandidate(candidateJSON)",
+                    arguments: ["candidateJSON": candidate],
+                    contentWorld: .page
+                )
+            } catch {
+                logger.error("addIceCandidate failed: \(error.localizedDescription)")
+            }
+        }
     }
     
-    func teardown() {
+    func cleanup() {
+        guard let wv = webView else { return }
+        Task {
+            do {
+                try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
+            } catch {
+                logger.error("cleanup failed: \(error.localizedDescription)")
+            }
+        }
+        
         webView?.stopLoading()
         webView?.loadHTMLString("", baseURL: nil)
         window?.orderOut(nil)
@@ -140,19 +175,23 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         guard let dict = message.body as? [String: Any],
               let type = dict["type"] as? String else { return }
         
-        Task { @MainActor in
-            switch type {
-            case "ice":
-                if let candidate = dict["candidate"] as? String {
-                    self.onIceCandidate?(candidate)
-                }
-            case "answer":
-                if let answer = dict["answer"] as? String {
-                    self.onAnswer?(answer)
-                }
-            default:
-                break
+        Task {
+            await self.handleMessage(type: type, data: dict)
+        }
+    }
+    
+    private func handleMessage(type: String, data: [String: Any]) {
+        switch type {
+        case "ice":
+            if let candidate = data["candidate"] as? String {
+                self.onIceCandidate?(candidate)
             }
+        case "answer":
+            if let answer = data["answer"] as? String {
+                self.onAnswer?(answer)
+            }
+        default:
+            break
         }
     }
     
@@ -162,20 +201,31 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         <html>
         <head><meta charset="utf-8"></head>
         <body>
+        <audio id="remoteAudio" autoplay></audio>
         <script>
         let pc = null;
         let stream = null;
         let audioTrack = null;
+        const remoteAudio = document.getElementById('remoteAudio');
         
         async function createOffer(iceServers) {
+            const micEnabled = audioTrack ? audioTrack.enabled : false;
+            
             if (!stream) {
                 stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
                 audioTrack = stream.getAudioTracks()[0];
-                audioTrack.enabled = false;
+                audioTrack.enabled = micEnabled;
             }
             
             pc = new RTCPeerConnection({iceServers: iceServers});
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            
+            pc.ontrack = (e) => {
+                if (e.streams && e.streams[0]) {
+                    remoteAudio.srcObject = e.streams[0];
+                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
+                }
+            };
             
             pc.onicecandidate = (e) => {
                 if (e.candidate) {
@@ -192,14 +242,23 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
         }
         
         async function handleOffer(offerJSON, iceServers) {
+            const micEnabled = audioTrack ? audioTrack.enabled : false;
+            
             if (!stream) {
                 stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
                 audioTrack = stream.getAudioTracks()[0];
-                audioTrack.enabled = false;
+                audioTrack.enabled = micEnabled;
             }
             
             pc = new RTCPeerConnection({iceServers: iceServers});
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            
+            pc.ontrack = (e) => {
+                if (e.streams && e.streams[0]) {
+                    remoteAudio.srcObject = e.streams[0];
+                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
+                }
+            };
             
             pc.onicecandidate = (e) => {
                 if (e.candidate) {
@@ -234,6 +293,22 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
                 audioTrack.enabled = enabled;
             }
         }
+        
+        function cleanup() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                audioTrack = null;
+            }
+            if (remoteAudio.srcObject) {
+                remoteAudio.srcObject.getTracks().forEach(track => track.stop());
+                remoteAudio.srcObject = null;
+            }
+        }
         </script>
         </body>
         </html>
@@ -241,8 +316,5 @@ final class WalkieTalkieAudio: NSObject, WKUIDelegate, WKScriptMessageHandler, @
     }
 }
 
-enum WalkieError: Error {
-    case notInitialized
-    case invalidOffer
-    case invalidAnswer
-}
+// Type alias for compatibility
+typealias WalkieTalkieAudio = WalkieTalkieAudioImpl
