@@ -70,26 +70,33 @@ actor WalkieTestClient {
         
         return try await withCheckedThrowingContinuation { continuation in
             streamTask = Task {
+                var hasResumed = false
+                
+                func resumeOnce(with result: Result<(String, String), Error>) {
+                    guard !hasResumed else { return }
+                    hasResumed = true
+                    continuation.resume(with: result)
+                }
+                
                 do {
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     
                     guard let httpResp = response as? HTTPURLResponse else {
-                        continuation.resume(throwing: TestError.invalidResponse)
+                        resumeOnce(with: .failure(TestError.invalidResponse))
                         return
                     }
                     
                     if httpResp.statusCode == 409 {
-                        continuation.resume(throwing: TestError.channelFull)
+                        resumeOnce(with: .failure(TestError.channelFull))
                         return
                     }
                     
                     guard httpResp.statusCode == 200 else {
-                        continuation.resume(throwing: TestError.httpError(httpResp.statusCode))
+                        resumeOnce(with: .failure(TestError.httpError(httpResp.statusCode)))
                         return
                     }
                     
                     var lineCount = 0
-                    var hasResumed = false
                     var localEvent: String?
                     for try await line in bytes.lines {
                         lineCount += 1
@@ -104,8 +111,7 @@ actor WalkieTestClient {
                             
                             if localEvent == "snapshot" && !hasResumed {
                                 guard let snapshot = WalkieProtocol.parseSnapshotEvent(dict) else {
-                                    continuation.resume(throwing: TestError.invalidJoinEvent)
-                                    hasResumed = true
+                                    resumeOnce(with: .failure(TestError.invalidJoinEvent))
                                     return
                                 }
                                 
@@ -114,8 +120,7 @@ actor WalkieTestClient {
                                     token: snapshot.sessionToken
                                 )
                                 
-                                continuation.resume(returning: (snapshot.sessionID, snapshot.member))
-                                hasResumed = true
+                                resumeOnce(with: .success((snapshot.sessionID, snapshot.member)))
                             } else if localEvent == "state" {
                                 if let stateEvent = WalkieProtocol.parseStateEvent(dict),
                                    let negID = stateEvent.negotiationID {
@@ -125,13 +130,16 @@ actor WalkieTestClient {
                         }
                         
                         if lineCount > 100 && !hasResumed {
-                            continuation.resume(throwing: TestError.noJoinEvent)
-                            hasResumed = true
+                            resumeOnce(with: .failure(TestError.noJoinEvent))
                             return
                         }
                     }
+                    
+                    if !hasResumed {
+                        resumeOnce(with: .failure(TestError.noJoinEvent))
+                    }
                 } catch {
-                    continuation.resume(throwing: error)
+                    resumeOnce(with: .failure(error))
                 }
             }
         }
