@@ -20,7 +20,29 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
     }
     
     func checkMicPermission() async -> Bool {
-        return await AVAudioApplication.requestRecordPermission()
+        // Never await the Swift 6 async import of requestRecordPermission()
+        // from @MainActor — Apple's completion runs on a background queue and
+        // that import corrupts the current-task executor (later assumeIsolated SIGBUS).
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            return true
+        case .denied:
+            return false
+        case .undetermined:
+            return await Self.requestRecordPermissionIsolated()
+        @unknown default:
+            return await Self.requestRecordPermissionIsolated()
+        }
+    }
+
+    /// Callback-based request. Apple's completion runs on a background queue;
+    /// `CheckedContinuation` resumes exactly once, then the caller hops back to MainActor.
+    nonisolated static func requestRecordPermissionIsolated() async -> Bool {
+        await withCheckedContinuation { continuation in
+            AVAudioApplication.requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
     }
     
     func setupWebView(
@@ -172,23 +194,31 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         type: WKMediaCaptureType,
         decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
     ) {
+        let handler = decisionHandler
         Task { @MainActor in
-            decisionHandler(.grant)
+            handler(.grant)
         }
     }
     
     nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // Read the message on this callback thread; WKScriptMessage is not Sendable.
+        guard let dict = message.body as? [String: Any],
+              let type = dict["type"] as? String else { return }
+        let candidate = dict["candidate"] as? String
+        let answer = dict["answer"] as? String
+        let errorMessage = dict["message"] as? String
+        let iceState = dict["state"] as? String
+        let candidateType = dict["candidateType"] as? String
+        let connectionState = dict["state"] as? String
         Task { @MainActor in
-            guard let dict = message.body as? [String: Any],
-                  let type = dict["type"] as? String else { return }
             self.handleMessage(
                 type: type,
-                candidate: dict["candidate"] as? String,
-                answer: dict["answer"] as? String,
-                errorMessage: dict["message"] as? String,
-                iceState: dict["state"] as? String,
-                candidateType: dict["candidateType"] as? String,
-                connectionState: dict["state"] as? String
+                candidate: candidate,
+                answer: answer,
+                errorMessage: errorMessage,
+                iceState: iceState,
+                candidateType: candidateType,
+                connectionState: connectionState
             )
         }
     }

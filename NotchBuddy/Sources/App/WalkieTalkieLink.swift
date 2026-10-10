@@ -143,6 +143,7 @@ final class WalkieTalkieLink {
     
     func configure(serverURL: String?, accessCode: String?) async {
         guard let code = accessCode, !code.isEmpty else {
+            logger.info("configure: early return, no access code")
             self.serverURL = nil
             self.channelToken = nil
             await disconnect()
@@ -150,6 +151,7 @@ final class WalkieTalkieLink {
         }
         
         guard let components = WalkieProtocol.decodeAccessCode(code) else {
+            logger.error("configure: early return, access code decode failed")
             await disconnect()
             return
         }
@@ -157,14 +159,23 @@ final class WalkieTalkieLink {
         self.serverURL = components.origin
         self.channelToken = components.channelToken
         self.channelNumber = components.channel
+        logger.info("configure: origin=\(components.origin, privacy: .public) channel=\(components.channel, privacy: .public)")
         
         await connectIfNeeded()
     }
     
     private func connectIfNeeded() async {
-        guard case .disconnected = state else { return }
-        guard let serverURL, let channelToken, !serverURL.isEmpty, !channelToken.isEmpty else { return }
+        guard case .disconnected = state else {
+            logger.info("connectIfNeeded: early return, already \(String(describing: self.state), privacy: .public)")
+            return
+        }
+        guard let serverURL, let channelToken, !serverURL.isEmpty, !channelToken.isEmpty else {
+            let hasURL = !(serverURL ?? "").isEmpty
+            logger.error("connectIfNeeded: early return, missing \(hasURL ? "channel token" : "server URL", privacy: .public)")
+            return
+        }
         
+        logger.info("connectIfNeeded: connecting to \(serverURL, privacy: .public) channel=\(self.channelNumber, privacy: .public)")
         channelFull = false
         state = .connected(tuned: false)
         reconnectAttempts = 0

@@ -1,5 +1,8 @@
 import AppKit
 import SwiftUI
+import os.log
+
+private let walkieLogger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -245,6 +248,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             let serverURL = Keychain.load(key: "walkie-server-url")
             let accessCode = Keychain.load(key: "walkie-access-code")
+            if serverURL == nil {
+                walkieLogger.info("Keychain load failed: walkie-server-url missing")
+            } else if serverURL?.isEmpty == true {
+                walkieLogger.info("Keychain load failed: walkie-server-url empty")
+            } else {
+                walkieLogger.info("Keychain load: walkie-server-url present")
+            }
+            if accessCode == nil {
+                walkieLogger.info("Keychain load failed: walkie-access-code missing")
+            } else if accessCode?.isEmpty == true {
+                walkieLogger.info("Keychain load failed: walkie-access-code empty")
+            } else {
+                walkieLogger.info("Keychain load: walkie-access-code present")
+            }
             await WalkieTalkieLink.shared.configure(serverURL: serverURL, accessCode: accessCode)
         }
     }
