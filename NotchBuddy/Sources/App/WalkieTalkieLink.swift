@@ -4,6 +4,21 @@ import os.log
 
 private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "WalkieTalkieLink")
 
+extension String {
+    func appendToFile(at path: String) throws {
+        if let data = self.data(using: .utf8) {
+            if FileManager.default.fileExists(atPath: path) {
+                let fileHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+                fileHandle.seekToEndOfFile()
+                fileHandle.write(data)
+                try fileHandle.close()
+            } else {
+                try data.write(to: URL(fileURLWithPath: path))
+            }
+        }
+    }
+}
+
 enum WalkieState: Equatable, Sendable {
     case disconnected
     case connected(tuned: Bool)
@@ -27,6 +42,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var negotiationID: String?
     private var isSeatA: Bool = false
     private var peerTuned: Bool = false
+    private var lastStateEventPeerTuned: Bool = false
     private var channelNumber: Int = 1
     
     private var eventTask: Task<Void, Never>?
@@ -250,6 +266,11 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 let myTuned = stateEvent.localTuned
                 let wasPeerTuned = peerTuned
                 peerTuned = stateEvent.peerTuned
+                lastStateEventPeerTuned = stateEvent.peerTuned
+                
+                // Debug trace for CI
+                let trace = "[\(Date().timeIntervalSince1970)] state event: local.tuned=\(stateEvent.localTuned) peer.tuned=\(stateEvent.peerTuned) negID=\(stateEvent.negotiationID ?? "nil") currentState=\(state)\n"
+                try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
                 
                 if myTuned && peerTuned {
                     // Both tuned - start or continue call
@@ -403,11 +424,17 @@ final class WalkieTalkieLink: @unchecked Sendable {
             }
         }
         
-        // Only transition to .inCall when peer is confirmed tuned by server
+        // Double-check peer is still tuned before transitioning to .inCall
+        // (conditions may have changed during async audio setup)
         guard peerTuned else {
-            // Mic is live, but stay in .waiting until peer joins
+            // Mic is live, but stay in current state until peer joins
+            let trace = "[\(Date().timeIntervalSince1970)] startNegotiation: NOT transitioning to inCall, peerTuned=false\n"
+            try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
             return
         }
+        
+        let trace = "[\(Date().timeIntervalSince1970)] startNegotiation: transitioning to inCall, peerTuned=\(peerTuned) lastStateEventPeerTuned=\(lastStateEventPeerTuned)\n"
+        try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
         
         state = .inCall(mode: .pushToTalk(transmitting: micEnabled))
         await stopWaitingAnimation()

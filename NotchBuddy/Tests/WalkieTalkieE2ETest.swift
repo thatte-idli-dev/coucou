@@ -91,6 +91,18 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Client A is waiting")
         
+        // Print debug traces to diagnose premature .inCall transition
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(atPath: "/tmp").filter({ $0.hasPrefix("walkie-trace-") }) {
+            for file in files {
+                if let content = try? String(contentsOfFile: "/tmp/\(file)") {
+                    print("=== Trace \(file) ===")
+                    print(content)
+                    print("=== End trace ===")
+                }
+            }
+        }
+        
         // Assert that A's mic is enabled even while waiting (before peer joins)
         guard audioA.micEnabled else {
             throw TestError("Client A's mic should be enabled while waiting for peer")
