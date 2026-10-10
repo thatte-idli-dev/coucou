@@ -17,6 +17,7 @@ enum WalkieState: Equatable, Sendable {
 }
 
 final class WalkieTalkieLink: @unchecked Sendable {
+    @MainActor
     static let shared = WalkieTalkieLink()
     
     private var state: WalkieState = .disconnected
@@ -49,6 +50,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     var waitingTimeout: TimeInterval = 30  // Injectable for tests
     
+    @MainActor
     private init() {
         self.audioLayer = WalkieTalkieAudio.shared
         
