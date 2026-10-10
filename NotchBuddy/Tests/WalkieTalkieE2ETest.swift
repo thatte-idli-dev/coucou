@@ -623,18 +623,18 @@ struct WalkieTalkieE2ETest {
         
         await linkA.configure(serverURL: serverURL, accessCode: accessCode)
         await linkB.configure(serverURL: serverURL, accessCode: accessCode)
-        try await waitUntil("A and B connected") {
-            linkA.currentState != .disconnected && linkB.currentState != .disconnected
+        try await waitUntil("A and B hold seats") {
+            linkA.hasSession && linkB.hasSession
         }
         
         await linkC.configure(serverURL: serverURL, accessCode: accessCode)
         try await waitUntil("C sees channel full") {
-            linkC.isChannelFull
+            linkC.isChannelFull && !linkC.hasSession
         }
         
         await linkA.disconnect()
         try await waitUntil("C joined after A left") {
-            !linkC.isChannelFull && linkC.currentState != .disconnected
+            !linkC.isChannelFull && linkC.hasSession
         }
         
         await linkB.disconnect()
@@ -658,14 +658,17 @@ struct WalkieTalkieE2ETest {
         
         await linkA.configure(serverURL: serverURL, accessCode: accessCode)
         await linkB.configure(serverURL: serverURL, accessCode: accessCode)
-        try await waitUntil("A and B connected") {
-            linkA.currentState != .disconnected && linkB.currentState != .disconnected
+        try await waitUntil("A and B hold seats") {
+            linkA.hasSession && linkB.hasSession
         }
         
         linkA.shutdown()
+        guard !linkA.hasSession else {
+            throw TestError("A should drop its session on quit")
+        }
         await linkC.configure(serverURL: serverURL, accessCode: accessCode)
         try await waitUntil("C connected after A quit") {
-            !linkC.isChannelFull && linkC.currentState != .disconnected
+            !linkC.isChannelFull && linkC.hasSession
         }
         
         await linkB.disconnect()

@@ -152,6 +152,10 @@ final class WalkieTalkieLink {
         channelFull
     }
 
+    var hasSession: Bool {
+        sessionID != nil
+    }
+
     private func publishIsland() {
         if channelFull {
             WalkieIslandState.shared.applyChannelFull()
