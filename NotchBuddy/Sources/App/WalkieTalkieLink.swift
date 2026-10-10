@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import os.log
 
-private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "WalkieTalkieLink")
+private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 extension String {
     func appendToFile(at path: String) throws {
@@ -35,7 +35,13 @@ final class WalkieTalkieLink: @unchecked Sendable {
     @MainActor
     static let shared = WalkieTalkieLink(audioLayer: WalkieTalkieAudio.shared)
     
-    private var state: WalkieState = .disconnected
+    private var state: WalkieState = .disconnected {
+        didSet {
+            if state != oldValue {
+                logger.info("State: \(String(describing: oldValue)) → \(String(describing: state))")
+            }
+        }
+    }
     private var sessionID: String?
     private var sessionToken: String?
     private var revision: Int = 0
@@ -151,6 +157,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(channelToken)", forHTTPHeaderField: "Authorization")
         
+        logger.info("SSE: Connecting to \(urlStr, privacy: .public)")
+        
         eventTask = Task {
             while !Task.isCancelled {
                 do {
@@ -158,21 +166,25 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     
                     if let httpResp = response as? HTTPURLResponse {
                         if httpResp.statusCode == 409 {
+                            logger.error("SSE: Channel full (409)")
                             channelFull = true
                             await disconnect()
                             return
                         }
                         
                         if httpResp.statusCode == 401 {
-                            logger.error("Authentication failed")
+                            logger.error("SSE: Authentication failed (401)")
                             await disconnect()
                             return
                         }
                         
                         guard httpResp.statusCode == 200 else {
+                            logger.warning("SSE: HTTP \(httpResp.statusCode), will retry")
                             try? await Task.sleep(for: .seconds(reconnectBackoff()))
                             continue
                         }
+                        
+                        logger.info("SSE: Connected (200)")
                     }
                     
                     reconnectAttempts = 0
@@ -367,16 +379,22 @@ final class WalkieTalkieLink: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
+        logger.info("Presence: rev=\(revision) tuned=\(tuned) transmitting=\(transmitting)")
+        
         do {
             let (_, response) = try await URLSession.shared.data(for: req)
             if let httpResp = response as? HTTPURLResponse {
-                if httpResp.statusCode == 401 || httpResp.statusCode == 409 {
-                    logger.error("Presence failed with \(httpResp.statusCode), reconnecting...")
+                if httpResp.statusCode == 200 {
+                    logger.debug("Presence: HTTP 200")
+                } else if httpResp.statusCode == 401 || httpResp.statusCode == 409 {
+                    logger.error("Presence: HTTP \(httpResp.statusCode), reconnecting...")
                     await reconnect()
+                } else {
+                    logger.warning("Presence: HTTP \(httpResp.statusCode)")
                 }
             }
         } catch {
-            logger.error("Presence failed: \(error.localizedDescription)")
+            logger.error("Presence: error \(error.localizedDescription)")
         }
     }
     
@@ -390,6 +408,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         }
         
         let hasPermission = await audioLayer.checkMicPermission()
+        logger.info("Mic permission check: \(hasPermission ? "granted" : "denied")")
         guard hasPermission else {
             await showMicPermissionAlert()
             return
@@ -444,6 +463,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func handleSignalEvent(_ dict: [String: Any]) async {
         guard let signalEvent = WalkieProtocol.parseSignalEvent(dict) else { return }
         guard signalEvent.from != sessionID else { return }
+        
+        logger.info("Signal received: kind=\(signalEvent.kind)")
         
         let payload = signalEvent.payload
         
@@ -518,6 +539,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func sendSignal(kind: String, payload: [String: String]) async {
         guard let serverURL, let sessionToken, let sessionID, let negotiationID else { return }
         
+        logger.info("Signal sending: kind=\(kind)")
+        
         let body = WalkieProtocol.buildSignalBody(
             sessionID: sessionID,
             negotiationID: negotiationID,
@@ -551,6 +574,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
         case .connected(tuned: false):
             let hasPermission = await audioLayer.checkMicPermission()
+            logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied")")
             guard hasPermission else {
                 await showMicPermissionAlert()
                 return
@@ -617,6 +641,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
         case .connected(tuned: false):
             let hasPermission = await audioLayer.checkMicPermission()
+            logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied")")
             guard hasPermission else {
                 await showMicPermissionAlert()
                 return

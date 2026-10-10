@@ -146,3 +146,79 @@ jobs:
             -destination 'generic/platform=iOS' \
             build \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Build downloadable walkie-talkie test build
+        run: |
+          xcodebuild \
+            -project NotchBuddy/NotchBuddy.xcodeproj \
+            -scheme NotchBuddy \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            build
+
+      - name: Ad-hoc codesign with mic entitlement
+        run: |
+          APP_PATH="DerivedData/Build/Products/Release/NotchBuddy.app"
+          
+          # Create temporary entitlements file
+          cat > /tmp/entitlements.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.device.audio-input</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+          
+          # Ad-hoc sign with entitlements
+          codesign --force --deep --sign - --entitlements /tmp/entitlements.plist "$APP_PATH"
+          
+          # Verify signature
+          codesign --verify --deep --strict "$APP_PATH"
+
+      - name: Zip app bundle
+        run: |
+          cd DerivedData/Build/Products/Release
+          ditto -c -k --keepParent NotchBuddy.app NotchBuddy.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotchBuddy-walkie-test
+          path: DerivedData/Build/Products/Release/NotchBuddy.zip
+
+      - name: Create prerelease
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/cursor/walkie-talkie-voice-client-')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TAG_NAME="walkie-test-${SHORT_SHA}"
+          
+          # Create release notes
+          cat > /tmp/release-notes.md <<EOF
+          # Walkie-Talkie Test Build
+          
+          **⚠️ Unsigned App - First Launch Instructions:**
+          1. Download \`NotchBuddy.zip\`
+          2. Extract the app
+          3. Right-click on NotchBuddy.app and select "Open"
+          4. Click "Open" in the security dialog
+          
+          Built from commit ${GITHUB_SHA} on branch ${GITHUB_REF_NAME}
+          
+          This is an ad-hoc signed test build for walkie-talkie feature testing.
+          EOF
+          
+          # Delete tag if it exists
+          gh release delete "$TAG_NAME" --yes 2>/dev/null || true
+          git push origin ":refs/tags/$TAG_NAME" 2>/dev/null || true
+          
+          # Create new prerelease
+          gh release create "$TAG_NAME" \
+            DerivedData/Build/Products/Release/NotchBuddy.zip \
+            --title "Walkie Test ${SHORT_SHA}" \
+            --notes-file /tmp/release-notes.md \
+            --prerelease

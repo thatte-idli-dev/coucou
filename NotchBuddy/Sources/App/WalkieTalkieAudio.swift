@@ -4,7 +4,7 @@ import WebKit
 import AVFoundation
 import os.log
 
-private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "WalkieTalkieAudio")
+private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 @MainActor
 final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKScriptMessageHandler {
@@ -179,13 +179,15 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         let candidate = dict["candidate"] as? String
         let answer = dict["answer"] as? String
         let errorMessage = dict["message"] as? String
+        let iceState = dict["state"] as? String
+        let candidateType = dict["candidateType"] as? String
         
         Task { @MainActor in
-            self.handleMessage(type: type, candidate: candidate, answer: answer, errorMessage: errorMessage)
+            self.handleMessage(type: type, candidate: candidate, answer: answer, errorMessage: errorMessage, iceState: iceState, candidateType: candidateType)
         }
     }
     
-    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?) {
+    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?, iceState: String?, candidateType: String?) {
         switch type {
         case "ice":
             if let candidate = candidate {
@@ -197,7 +199,15 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             }
         case "error":
             if let errorMessage = errorMessage {
-                logger.error("WebRTC error: \(errorMessage)")
+                logger.error("WebRTC JS error: \(errorMessage)")
+            }
+        case "iceState":
+            if let iceState = iceState {
+                logger.info("ICE connection state: \(iceState)")
+            }
+        case "candidatePair":
+            if let candidateType = candidateType {
+                logger.info("Selected candidate pair type: \(candidateType)")
             }
         default:
             break

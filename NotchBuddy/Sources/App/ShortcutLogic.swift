@@ -264,6 +264,14 @@ final class WalkieGestureClassifier {
 
     func keyDown(at nowMS: Int64) -> Event? {
         if pressTime != nil { return nil }
+        
+        // If a second press happens within the double-tap window,
+        // cancel the pending tap to prevent emitting tap while key is held
+        if firstTapPending {
+            firstTapPending = false
+            lastReleaseTime = nil
+        }
+        
         pressTime = nowMS
         return nil
     }

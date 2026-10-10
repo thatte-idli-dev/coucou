@@ -9,6 +9,8 @@ enum WalkieGestureTests {
         testDoubleTapNotMisreadAsTapHangup()
         testKeyRepeatDebounce()
         testHoldThresholdExact()
+        testTapThenHold()
+        testSlowDoubleTap()
         print("WalkieGestureClassifier: all cases passed")
     }
 
@@ -143,5 +145,59 @@ enum WalkieGestureTests {
         // Key up at t=1200
         let e3 = c.keyUp(at: 1200)
         precondition(e3 == .pttUp, "keyUp after threshold must emit pttUp")
+    }
+
+    // MARK: - testTapThenHold
+    
+    static func testTapThenHold() {
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        
+        // First tap: down at t=0, up at t=100
+        _ = c.keyDown(at: 0)
+        let e1 = c.keyUp(at: 100)
+        precondition(e1 == nil, "first tap keyUp waits")
+        
+        // Second press (hold): down at t=200 (within double-tap window)
+        let e2 = c.keyDown(at: 200)
+        precondition(e2 == nil, "second keyDown within window")
+        
+        // Hold crosses threshold at t=380
+        let e3 = c.checkHoldThreshold(at: 380)
+        precondition(e3 == .pttDown, "hold threshold emits pttDown")
+        
+        // CRITICAL: No tap should be emitted while key is held
+        let e4 = c.checkTapTimeout(at: 700)
+        precondition(e4 == nil, "tap must not emit during hold - first tap was cancelled by second press")
+        
+        // Key up at t=1000
+        let e5 = c.keyUp(at: 1000)
+        precondition(e5 == .pttUp, "keyUp after hold emits pttUp")
+        
+        // Still no tap after release
+        let e6 = c.checkTapTimeout(at: 1500)
+        precondition(e6 == nil, "no tap after pttUp")
+    }
+
+    // MARK: - testSlowDoubleTap
+    
+    static func testSlowDoubleTap() {
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        
+        // First tap: down at t=0, up at t=100
+        _ = c.keyDown(at: 0)
+        let e1 = c.keyUp(at: 100)
+        precondition(e1 == nil, "first tap keyUp waits")
+        
+        // Second tap: down at t=450 (within 500ms window, but slow)
+        let e2 = c.keyDown(at: 450)
+        precondition(e2 == nil, "second keyDown")
+        
+        // Second tap up at t=550 (duration=100ms, short tap)
+        let e3 = c.keyUp(at: 550)
+        precondition(e3 == .doubleTap, "slow but valid double-tap emits doubleTap")
+        
+        // No tap event should follow
+        let e4 = c.checkTapTimeout(at: 1100)
+        precondition(e4 == nil, "no tap after doubleTap")
     }
 }

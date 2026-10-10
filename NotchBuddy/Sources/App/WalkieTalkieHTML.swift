@@ -39,6 +39,36 @@ async function createOffer(iceServers) {
         }
     };
     
+    pc.oniceconnectionstatechange = () => {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'iceState',
+            state: pc.iceConnectionState
+        });
+        if (pc.iceConnectionState === 'connected') {
+            pc.getStats().then(stats => {
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                        let localCandidate = null;
+                        let remoteCandidate = null;
+                        stats.forEach(r => {
+                            if (r.type === 'local-candidate' && r.id === report.localCandidateId) {
+                                localCandidate = r;
+                            }
+                            if (r.type === 'remote-candidate' && r.id === report.remoteCandidateId) {
+                                remoteCandidate = r;
+                            }
+                        });
+                        const candidateType = localCandidate ? localCandidate.candidateType : 'unknown';
+                        window.webkit.messageHandlers.native.postMessage({
+                            type: 'candidatePair',
+                            candidateType: candidateType
+                        });
+                    }
+                });
+            }).catch(err => console.error('getStats failed:', err));
+        }
+    };
+    
     pc.onicecandidate = (e) => {
         if (e.candidate) {
             window.webkit.messageHandlers.native.postMessage({
@@ -67,6 +97,36 @@ async function handleOffer(offerJSON, iceServers) {
         if (e.streams && e.streams[0]) {
             remoteAudio.srcObject = e.streams[0];
             remoteAudio.play().catch(err => console.error('Audio play failed:', err));
+        }
+    };
+    
+    pc.oniceconnectionstatechange = () => {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'iceState',
+            state: pc.iceConnectionState
+        });
+        if (pc.iceConnectionState === 'connected') {
+            pc.getStats().then(stats => {
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                        let localCandidate = null;
+                        let remoteCandidate = null;
+                        stats.forEach(r => {
+                            if (r.type === 'local-candidate' && r.id === report.localCandidateId) {
+                                localCandidate = r;
+                            }
+                            if (r.type === 'remote-candidate' && r.id === report.remoteCandidateId) {
+                                remoteCandidate = r;
+                            }
+                        });
+                        const candidateType = localCandidate ? localCandidate.candidateType : 'unknown';
+                        window.webkit.messageHandlers.native.postMessage({
+                            type: 'candidatePair',
+                            candidateType: candidateType
+                        });
+                    }
+                });
+            }).catch(err => console.error('getStats failed:', err));
         }
     };
     
