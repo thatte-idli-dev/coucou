@@ -29,11 +29,13 @@ struct WebKitBridgeTest {
         print("=========================================================\n")
         
         // Create two web views (simulating two peers)
-        let webViewA = await createWebView()
-        let webViewB = await createWebView()
+        let delegate = NavigationDelegate()
+        let webViewA = await createWebView(delegate: delegate)
+        let webViewB = await createWebView(delegate: delegate)
         
-        // Wait for pages to load
-        try await Task.sleep(for: .milliseconds(500))
+        // Wait for pages to load completely
+        print("⏳ Waiting for pages to load...")
+        try await Task.sleep(for: .seconds(2))
         
         print("✓ Web views created and loaded\n")
         
@@ -132,11 +134,12 @@ struct WebKitBridgeTest {
         print("✅ Full offer/answer flow completed successfully")
     }
     
-    static func createWebView() async -> WKWebView {
+    static func createWebView(delegate: WKNavigationDelegate) async -> WKWebView {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = delegate
         
         // Use the same HTML as production WalkieTalkieAudio
         let html = """
@@ -269,6 +272,17 @@ struct WebKitBridgeTest {
         webView.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
         
         return webView
+    }
+}
+
+@MainActor
+class NavigationDelegate: NSObject, WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // Page loaded
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        print("Navigation failed: \(error)")
     }
 }
 
