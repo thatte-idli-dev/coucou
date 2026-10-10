@@ -9,11 +9,20 @@ let walkieTalkieHTML = """
 <body>
 <audio id="remoteAudio" autoplay></audio>
 <script>
+function postNative(payload) {
+    try {
+        const handlers = window.webkit && window.webkit.messageHandlers;
+        if (handlers && handlers.native) {
+            handlers.native.postMessage(payload);
+        }
+    } catch (err) {}
+}
+
 // Forward console errors to native logger
 const originalConsoleError = console.error;
 console.error = function(...args) {
     originalConsoleError.apply(console, args);
-    window.webkit.messageHandlers.native.postMessage({
+    postNative({
         type: 'consoleError',
         message: args.map(a => String(a)).join(' ')
     });
@@ -33,14 +42,14 @@ let levelTimer = null;
 const remoteAudio = document.getElementById('remoteAudio');
 
 if (!navigator.mediaDevices) {
-    window.webkit.messageHandlers.native.postMessage({
+    postNative({
         type: 'error',
         message: 'navigator.mediaDevices is undefined (secure context required)'
     });
 }
 
 function postLog(message) {
-    window.webkit.messageHandlers.native.postMessage({
+    postNative({
         type: 'log',
         message: String(message)
     });
@@ -144,7 +153,7 @@ function rmsFromAnalyser(analyser) {
 function startLevelLoop() {
     if (levelTimer) return;
     levelTimer = setInterval(() => {
-        window.webkit.messageHandlers.native.postMessage({
+        postNative({
             type: 'levels',
             local: rmsFromAnalyser(localAnalyser),
             remote: rmsFromAnalyser(remoteAnalyser)
@@ -175,14 +184,14 @@ function wirePeerConnection() {
     };
 
     pc.onconnectionstatechange = () => {
-        window.webkit.messageHandlers.native.postMessage({
+        postNative({
             type: 'connectionState',
             state: pc.connectionState
         });
     };
 
     pc.oniceconnectionstatechange = () => {
-        window.webkit.messageHandlers.native.postMessage({
+        postNative({
             type: 'iceState',
             state: pc.iceConnectionState
         });
@@ -201,7 +210,7 @@ function wirePeerConnection() {
                             }
                         });
                         const candidateType = localCandidate ? localCandidate.candidateType : 'unknown';
-                        window.webkit.messageHandlers.native.postMessage({
+                        postNative({
                             type: 'candidatePair',
                             candidateType: candidateType
                         });
@@ -213,7 +222,7 @@ function wirePeerConnection() {
 
     pc.onicecandidate = (e) => {
         if (e.candidate) {
-            window.webkit.messageHandlers.native.postMessage({
+            postNative({
                 type: 'ice',
                 candidate: JSON.stringify(e.candidate.toJSON())
             });
