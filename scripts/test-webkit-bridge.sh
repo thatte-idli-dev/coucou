@@ -15,6 +15,7 @@ TEST_BUILD_DIR=$(mktemp -d)
 trap "rm -rf $TEST_BUILD_DIR" EXIT
 
 swiftc \
+    -parse-as-library \
     -o "$TEST_BUILD_DIR/webkit-bridge-test" \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target arm64-apple-macosx13.0 \

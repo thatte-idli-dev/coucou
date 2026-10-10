@@ -107,6 +107,7 @@ trap "rm -rf $TEST_BUILD_DIR; kill $SERVER_PID 2>/dev/null || true; wait $SERVER
 
 # Compile the test with all required files (including REAL WalkieTalkieLink.swift)
 swiftc \
+    -parse-as-library \
     -o "$TEST_BUILD_DIR/walkie-e2e-test" \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
     -target arm64-apple-macosx13.0 \
