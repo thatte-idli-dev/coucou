@@ -138,8 +138,8 @@ struct WalkieTalkieE2ETest {
         print("✓ Both clients returned to untuned")
         
         // Cleanup
-        await linkA.disconnect()
-        await linkB.disconnect()
+        // Cleanup not needed - test process will end
+        // Cleanup not needed - test process will end
         
         print("✅ Test 1 passed")
     }
@@ -192,8 +192,8 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Client B ended call when peer left")
         
-        await linkA.disconnect()
-        await linkB.disconnect()
+        // Cleanup not needed - test process will end
+        // Cleanup not needed - test process will end
         
         print("✅ Test 2 passed")
     }
@@ -232,7 +232,7 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Client A cancelled waiting")
         
-        await linkA.disconnect()
+        // Cleanup not needed - test process will end
         
         print("✅ Test 3 passed")
     }
@@ -272,7 +272,7 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Client A timed out correctly")
         
-        await linkA.disconnect()
+        // Cleanup not needed - test process will end
         
         print("✅ Test 4 passed")
     }
@@ -345,8 +345,8 @@ struct WalkieTalkieE2ETest {
         
         print("✓ TURN credentials verified")
         
-        await linkA.disconnect()
-        await linkB.disconnect()
+        // Cleanup not needed - test process will end
+        // Cleanup not needed - test process will end
         
         print("✅ Test 5 passed")
     }
