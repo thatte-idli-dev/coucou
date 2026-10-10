@@ -60,9 +60,17 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         contentController.add(self, name: "native")
         config.userContentController = contentController
         
-        // PRIVATE WEBKIT API: _getUserMediaRequiresFocus
-        if config.preferences.responds(to: Selector(("_setGetUserMediaRequiresFocus:"))) {
-            config.preferences.setValue(false, forKey: "_getUserMediaRequiresFocus")
+        // Never KVC private WebKit keys: responds(to: setter) can be true while
+        // setValue(_:forKey:) throws NSUnknownKeyException and unwinds a Swift
+        // async frame (corrupts the executor; later assumeIsolated SIGBUS).
+        if Self.applyPrivateBoolPreference(
+            config.preferences,
+            setterName: "_setGetUserMediaRequiresFocus:",
+            value: false
+        ) {
+            logger.info("WKPreferences: applied _setGetUserMediaRequiresFocus: via perform")
+        } else {
+            logger.info("WKPreferences: _setGetUserMediaRequiresFocus: unsupported; offscreen front window fallback")
         }
         
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
@@ -75,11 +83,14 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             defer: false
         )
         win.contentView = wv
+        win.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         win.alphaValue = 0.01
         win.ignoresMouseEvents = true
         win.collectionBehavior = [.stationary, .canJoinAllSpaces, .ignoresCycle]
-        win.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.minimumWindow)))
-        win.orderBack(nil)
+        // Ordered front (not key) so getUserMedia can run while Coucou is an
+        // unfocused LSUIElement. Real-Mac proof of background capture is pending.
+        win.level = .floating
+        win.orderFrontRegardless()
         
         self.window = win
         self.webView = wv
@@ -223,6 +234,18 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         }
     }
     
+    /// Invoke a private WKPreferences BOOL setter via `perform`. Never KVC.
+    private static func applyPrivateBoolPreference(
+        _ preferences: WKPreferences,
+        setterName: String,
+        value: Bool
+    ) -> Bool {
+        let sel = NSSelectorFromString(setterName)
+        guard preferences.responds(to: sel) else { return false }
+        preferences.perform(sel, with: NSNumber(value: value))
+        return true
+    }
+
     private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?, iceState: String?, candidateType: String?, connectionState: String?) {
         switch type {
         case "ice":

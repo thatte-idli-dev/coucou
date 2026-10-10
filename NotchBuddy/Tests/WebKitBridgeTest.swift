@@ -59,14 +59,14 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         
         // Create web views with the override
         let configA = WKWebViewConfiguration()
-        configA.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        applyPrivateBoolPreference(configA.preferences, setterName: "_setAllowFileAccessFromFileURLs:", value: true)
         configA.userContentController.addUserScript(userScript)
         webViewA = WKWebView(frame: .zero, configuration: configA)
         delegateA = NavigationDelegate()
         webViewA.navigationDelegate = delegateA
         
         let configB = WKWebViewConfiguration()
-        configB.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        applyPrivateBoolPreference(configB.preferences, setterName: "_setAllowFileAccessFromFileURLs:", value: true)
         configB.userContentController.addUserScript(userScript)
         webViewB = WKWebView(frame: .zero, configuration: configB)
         delegateB = NavigationDelegate()
@@ -306,6 +306,14 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         }
         return nil
     }
+}
+
+/// Private WKPreferences setters must be invoked via `perform`, never KVC.
+@MainActor
+func applyPrivateBoolPreference(_ preferences: WKPreferences, setterName: String, value: Bool) {
+    let sel = NSSelectorFromString(setterName)
+    guard preferences.responds(to: sel) else { return }
+    preferences.perform(sel, with: NSNumber(value: value))
 }
 
 @MainActor
