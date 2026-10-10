@@ -491,10 +491,17 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func handleSignalEvent(_ dict: [String: Any]) async {
-        guard let signalEvent = WalkieProtocol.parseSignalEvent(dict) else { return }
-        guard signalEvent.from != sessionID else { return }
+        guard let signalEvent = WalkieProtocol.parseSignalEvent(dict) else {
+            logger.error("Failed to parse signal event")
+            return
+        }
         
-        logger.info("Signal received: kind=\(signalEvent.kind, privacy: .public)")
+        if signalEvent.from == sessionID {
+            logger.debug("Ignoring signal from self: kind=\(signalEvent.kind, privacy: .public)")
+            return
+        }
+        
+        logger.info("Signal received: kind=\(signalEvent.kind, privacy: .public) from=\(signalEvent.from, privacy: .public)")
         
         let payload = signalEvent.payload
         
@@ -576,9 +583,12 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func sendSignal(kind: String, payload: [String: String]) async {
-        guard let serverURL, let sessionToken, let sessionID, let negotiationID else { return }
+        guard let serverURL, let sessionToken, let sessionID, let negotiationID else {
+            logger.error("Cannot send signal: missing serverURL/token/sessionID/negotiationID")
+            return
+        }
         
-        logger.info("Signal sending: kind=\(kind, privacy: .public)")
+        logger.info("Signal sending: kind=\(kind, privacy: .public) session=\(sessionID, privacy: .public) negID=\(negotiationID, privacy: .public)")
         
         let body = WalkieProtocol.buildSignalBody(
             sessionID: sessionID,
@@ -587,10 +597,16 @@ final class WalkieTalkieLink: @unchecked Sendable {
             payload: payload
         )
         
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
+            logger.error("Failed to serialize signal body")
+            return
+        }
         
         let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/signal"
-        guard let url = URL(string: urlStr) else { return }
+        guard let url = URL(string: urlStr) else {
+            logger.error("Invalid signal URL: \(urlStr, privacy: .public)")
+            return
+        }
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -598,7 +614,18 @@ final class WalkieTalkieLink: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
-        _ = try? await URLSession.shared.data(for: req)
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            if let httpResp = response as? HTTPURLResponse {
+                if httpResp.statusCode == 200 {
+                    logger.info("Signal sent successfully: kind=\(kind, privacy: .public)")
+                } else {
+                    logger.error("Signal send failed: HTTP \(httpResp.statusCode, privacy: .public)")
+                }
+            }
+        } catch {
+            logger.error("Signal send error: \(error.localizedDescription, privacy: .public)")
+        }
     }
     
     private func handlePTTDown() async {
