@@ -548,6 +548,12 @@ actor TestWalkieTalkieLink {
                     } else {
                         print("[Test] Both tuned but negotiationID unchanged: \(String(describing: stateEvent.negotiationID))")
                     }
+                } else if myTuned && !peerTuned {
+                    // Peer left while we're tuned
+                    if case .inCall = state {
+                        print("[Test] Peer left, ending call")
+                        await endCall()
+                    }
                 } else {
                     print("[Test] State update: myTuned=\(myTuned), peerTuned=\(peerTuned)")
                 }
