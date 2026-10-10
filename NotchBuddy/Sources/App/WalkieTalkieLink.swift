@@ -245,7 +245,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 
             case "state":
                 guard let stateEvent = WalkieProtocol.parseStateEvent(dict) else { return }
-                let myTuned = isLocallyTuned()
+                // Use server's view of both local and peer tuned state (not local state)
+                // This prevents entering call before server confirms both are tuned
+                let myTuned = stateEvent.localTuned
                 let wasPeerTuned = peerTuned
                 peerTuned = stateEvent.peerTuned
                 
@@ -365,7 +367,12 @@ final class WalkieTalkieLink: @unchecked Sendable {
         case .disconnected, .inCall:
             return
         }
-        guard peerTuned else { return }
+        
+        // Enforce rule: only enter call when peer is confirmed tuned by server
+        guard peerTuned else {
+            assertionFailure("startNegotiation called without peer tuned - should only enter call when server confirms both tuned")
+            return
+        }
         
         let hasPermission = await audioLayer.checkMicPermission()
         guard hasPermission else {
