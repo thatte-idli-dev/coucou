@@ -39,6 +39,35 @@ if (!navigator.mediaDevices) {
     });
 }
 
+function postLog(message) {
+    window.webkit.messageHandlers.native.postMessage({
+        type: 'log',
+        message: String(message)
+    });
+}
+
+function errorName(err) {
+    if (!err) return 'unknown';
+    if (err.name) return err.name;
+    return String(err);
+}
+
+function withTimeout(promise, ms, label) {
+    let timer = null;
+    const timeout = new Promise(function(_, reject) {
+        timer = setTimeout(function() {
+            reject(new Error(label + ' timed out after ' + ms + 'ms'));
+        }, ms);
+    });
+    return Promise.race([promise, timeout]).then(function(value) {
+        if (timer) clearTimeout(timer);
+        return value;
+    }, function(err) {
+        if (timer) clearTimeout(timer);
+        throw err;
+    });
+}
+
 function setMicEnabled(enabled) {
     wantMic = !!enabled;
     if (audioTrack) {
@@ -48,7 +77,18 @@ function setMicEnabled(enabled) {
 
 async function ensureStream() {
     if (!stream) {
-        stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+        postLog('getUserMedia start');
+        try {
+            stream = await withTimeout(
+                navigator.mediaDevices.getUserMedia({audio: true, video: false}),
+                8000,
+                'getUserMedia'
+            );
+            postLog('getUserMedia ok');
+        } catch (err) {
+            postLog('getUserMedia err ' + errorName(err));
+            throw err;
+        }
         audioTrack = stream.getAudioTracks()[0] || null;
         if (audioTrack) audioTrack.enabled = wantMic;
         attachAnalyser(stream, 'local');
@@ -56,6 +96,19 @@ async function ensureStream() {
         audioTrack.enabled = wantMic;
     }
     return stream;
+}
+
+async function probeMic() {
+    try {
+        postLog('probeMic start');
+        await ensureStream();
+        const n = stream ? stream.getAudioTracks().length : 0;
+        postLog('probeMic ok tracks=' + n);
+        return true;
+    } catch (err) {
+        postLog('probeMic err ' + errorName(err));
+        return false;
+    }
 }
 
 function attachAnalyser(mediaStream, kind) {
@@ -172,12 +225,21 @@ async function createOffer(iceServers) {
     await ensureStream();
 
     pc = new RTCPeerConnection({iceServers: iceServers});
+    postLog('pc created');
     remoteDescriptionSet = false;
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
     wirePeerConnection();
 
-    const offer = await pc.createOffer();
+    let offer;
+    try {
+        offer = await withTimeout(pc.createOffer(), 8000, 'createOffer');
+        postLog('offer created');
+    } catch (err) {
+        postLog('createOffer err ' + errorName(err));
+        throw err;
+    }
     await pc.setLocalDescription(offer);
+    postLog('setLocalDescription');
     return JSON.stringify(offer);
 }
 
@@ -185,6 +247,7 @@ async function handleOffer(offerJSON, iceServers) {
     await ensureStream();
 
     pc = new RTCPeerConnection({iceServers: iceServers});
+    postLog('pc created');
     remoteDescriptionSet = false;
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
     wirePeerConnection();
@@ -193,8 +256,16 @@ async function handleOffer(offerJSON, iceServers) {
     await pc.setRemoteDescription(offer);
     remoteDescriptionSet = true;
     await flushPendingCandidates();
-    const answer = await pc.createAnswer();
+    let answer;
+    try {
+        answer = await withTimeout(pc.createAnswer(), 8000, 'createAnswer');
+        postLog('answer created');
+    } catch (err) {
+        postLog('createAnswer err ' + errorName(err));
+        throw err;
+    }
     await pc.setLocalDescription(answer);
+    postLog('setLocalDescription');
     return JSON.stringify(answer);
 }
 

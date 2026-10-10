@@ -62,10 +62,16 @@ final class WalkieTalkieLink {
     private var channelNumber: Int = 1
     
     private var eventTask: Task<Void, Never>?
+    private var eventSession: URLSession?
+    private var streamGeneration: Int = 0
     private var presenceTask: Task<Void, Never>?
     private var waitingTimer: Task<Void, Never>?
     private var iceRefreshTimer: Task<Void, Never>?
     private var streamHealthTimer: Task<Void, Never>?
+    private var bothTunedWatchdog: Task<Void, Never>?
+    private(set) var reconnectCount: Int = 0
+    private(set) var channelFullCount: Int = 0
+    var streamDeadAfter: TimeInterval = WalkieSSE.streamDeadAfter
     
     private var iceServers: [[String: Any]] = []
     private var serverURL: String?
@@ -156,6 +162,10 @@ final class WalkieTalkieLink {
         sessionID != nil
     }
 
+    func forceReconnectForTest() async {
+        await reconnect()
+    }
+
     private func publishIsland() {
         if channelFull {
             WalkieIslandState.shared.applyChannelFull()
@@ -215,6 +225,8 @@ final class WalkieTalkieLink {
         logger.info("connectIfNeeded: connecting to \(serverURL, privacy: .public) channel=\(self.channelNumber, privacy: .public)")
         channelFull = false
         channelFullAttempts = 0
+        reconnectCount = 0
+        channelFullCount = 0
         state = .connected(tuned: false)
         reconnectAttempts = 0
         
@@ -234,15 +246,30 @@ final class WalkieTalkieLink {
     
     private func startEventStream() async {
         eventTask?.cancel()
+        eventSession?.invalidateAndCancel()
+        eventSession = nil
         
         guard let request = makeEventsRequest() else { return }
+        streamGeneration += 1
+        let generation = streamGeneration
+        
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 7 * 24 * 3600
+        config.timeoutIntervalForResource = 7 * 24 * 3600
+        let session = URLSession(configuration: config)
+        eventSession = session
+        
+        lastEventTime = Date()
         logger.info("SSE: Connecting to \(request.url?.absoluteString ?? "", privacy: .public)")
         
-        // I/O stays off the main actor; every state / UI hop goes through @MainActor methods.
+        // I/O stays off the main actor. Read raw bytes so `: keepalive`
+        // comments refresh liveness (bytes.lines dropped those).
         eventTask = Task.detached { [weak self] in
             while !Task.isCancelled {
+                let currentGen = await self?.streamGeneration
+                if currentGen != generation { return }
                 do {
-                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let (bytes, response) = try await session.bytes(for: request)
                     if let status = (response as? HTTPURLResponse)?.statusCode {
                         switch await self?.consumeEventHTTPStatus(status) ?? .stop {
                         case .stop:
@@ -255,19 +282,32 @@ final class WalkieTalkieLink {
                         }
                     }
                     
-                    for try await line in bytes.lines {
+                    var buffer = Data()
+                    for try await byte in bytes {
                         if Task.isCancelled { break }
-                        await self?.handleSSELine(line)
+                        buffer.append(byte)
+                        if byte == 0x0A {
+                            await self?.noteSSEBytes()
+                            let lines = WalkieSSE.pullLines(from: &buffer)
+                            for line in lines {
+                                await self?.handleSSELine(line)
+                            }
+                        }
                     }
                     
                     if !Task.isCancelled {
-                        await self?.noteSSEStreamEnded()
-                        if let backoff = await self?.nextReconnectBackoff() {
-                            try? await Task.sleep(for: .seconds(backoff))
+                        let stillCurrent = await self?.streamGeneration == generation
+                        if stillCurrent {
+                            await self?.noteSSEStreamEnded()
+                            if let backoff = await self?.nextReconnectBackoff() {
+                                try? await Task.sleep(for: .seconds(backoff))
+                            }
                         }
                     }
                 } catch {
                     if Task.isCancelled { break }
+                    let stillCurrent = await self?.streamGeneration == generation
+                    if !stillCurrent { return }
                     await self?.noteSSEError(error)
                     if let backoff = await self?.nextReconnectBackoff() {
                         try? await Task.sleep(for: .seconds(backoff))
@@ -285,6 +325,7 @@ final class WalkieTalkieLink {
     
     private func consumeEventHTTPStatus(_ status: Int) async -> EventStreamDisposition {
         if status == 409 {
+            channelFullCount += 1
             channelFullAttempts += 1
             let delay = WalkieProtocol.channelFullBackoff(
                 attempt: channelFullAttempts,
@@ -332,10 +373,11 @@ final class WalkieTalkieLink {
         
         streamHealthTimer = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(35))
+                try? await Task.sleep(for: .seconds(5))
                 if self.channelFull { continue }
-                if Date().timeIntervalSince(self.lastEventTime) > 35 {
-                    logger.warning("Stream dead for 35s, reconnecting...")
+                let age = Date().timeIntervalSince(self.lastEventTime)
+                if age > self.streamDeadAfter {
+                    logger.warning("Stream dead for \(age, privacy: .public)s, reconnecting...")
                     await self.reconnect()
                 }
             }
@@ -343,28 +385,44 @@ final class WalkieTalkieLink {
     }
     
     private func reconnect() async {
+        reconnectCount += 1
         logger.info("Reconnecting...")
+        lastEventTime = Date()
         
-        // Reset state per protocol rules
         let wasConnected = state != .disconnected
+        // Close the old SSE and DELETE the seat before opening a new /events.
+        cancelWalkieTasks()
+        audioLayer.cleanup()
+        await leaveSession()
+        
         sessionID = nil
         sessionToken = nil
         revision = 0
         negotiationID = nil
         peerTuned = false
         hasPlayedGreet = false
-        
-        audioLayer.cleanup()
+        bothTunedWatchdog?.cancel()
+        bothTunedWatchdog = nil
         
         if wasConnected {
-            state = .disconnected
             state = .connected(tuned: false)
             await startEventStream()
+            await startStreamHealthMonitor()
         }
+    }
+
+    private func noteSSEBytes() {
+        lastEventTime = Date()
     }
     
     private func handleSSELine(_ line: String) async {
         lastEventTime = Date()
+        if WalkieSSE.isCommentLine(line) {
+            if line.contains("keepalive") {
+                logger.info("SSE: keepalive")
+            }
+            return
+        }
         if line.hasPrefix("event: ") {
             currentSSEEvent = String(line.dropFirst(7))
         } else if line.hasPrefix("data: ") {
@@ -382,6 +440,10 @@ final class WalkieTalkieLink {
                 isSeatA = snapshot.member == "A"
                 revision = 0
                 await startPresence()
+                attachAudioLayer()
+                Task {
+                    await self.audioLayer.probeCapture()
+                }
                 
             case "state":
                 guard let stateEvent = WalkieProtocol.parseStateEvent(dict) else { return }
@@ -391,12 +453,21 @@ final class WalkieTalkieLink {
                 let wasPeerTuned = peerTuned
                 peerTuned = stateEvent.peerTuned
                 lastStateEventPeerTuned = stateEvent.peerTuned
+                let offererLabel = self.isSeatA ? "A (offerer)" : "B (answerer)"
+                logger.info("Server state: local.tuned=\(stateEvent.localTuned, privacy: .public) peer.tuned=\(stateEvent.peerTuned, privacy: .public) offerer=\(offererLabel, privacy: .public) negotiation=\(stateEvent.negotiationID ?? "none", privacy: .public)")
                 
                 // Debug trace for CI
                 let trace = "[\(Date().timeIntervalSince1970)] state event: local.tuned=\(stateEvent.localTuned) peer.tuned=\(stateEvent.peerTuned) negID=\(stateEvent.negotiationID ?? "nil") currentState=\(state)\n"
                 try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
                 
                 if myTuned && peerTuned {
+                    logger.info("Both tuned: local=true peer=true offerer=\(offererLabel, privacy: .public) negotiation=\(stateEvent.negotiationID ?? "none", privacy: .public)")
+                    if stateEvent.negotiationID == nil {
+                        self.startBothTunedWatchdog()
+                    } else {
+                        self.bothTunedWatchdog?.cancel()
+                        self.bothTunedWatchdog = nil
+                    }
                     // Both tuned - start or continue call
                     if case .waiting = state {
                         waitingTimer?.cancel()
@@ -416,16 +487,22 @@ final class WalkieTalkieLink {
                         playGreetOnce()
                     }
                 } else if myTuned && !peerTuned {
+                    self.bothTunedWatchdog?.cancel()
+                    self.bothTunedWatchdog = nil
                     // Peer left
                     if case .inCall = state {
                         await endCall()
                     }
                 } else if !myTuned && peerTuned {
+                    self.bothTunedWatchdog?.cancel()
+                    self.bothTunedWatchdog = nil
                     // Peer is waiting
                     if case .connected = state {
                         await startWaitingAnimation()
                     }
                 } else {
+                    self.bothTunedWatchdog?.cancel()
+                    self.bothTunedWatchdog = nil
                     // Both untuned - stop wiggle and reset greet
                     await stopWaitingAnimation()
                     hasPlayedGreet = false
@@ -455,10 +532,36 @@ final class WalkieTalkieLink {
         
         presenceTask = Task {
             while !Task.isCancelled {
-                await sendPresence()
-                try? await Task.sleep(for: .seconds(15))
+                await self.sendPresence()
+                try? await Task.sleep(for: .seconds(WalkieSSE.presenceInterval))
             }
         }
+    }
+
+    private func startBothTunedWatchdog() {
+        bothTunedWatchdog?.cancel()
+        bothTunedWatchdog = Task {
+            try? await Task.sleep(for: .seconds(WalkieSSE.bothTunedOfferDeadline))
+            guard !Task.isCancelled else { return }
+            if self.peerTuned && self.isLocallyTuned() && self.negotiationID == nil {
+                logger.error("Both tuned for 5s but no negotiation_id/offer")
+            }
+        }
+    }
+
+    private func attachAudioLayer() {
+        audioLayer.setupWebView(
+            onIceCandidate: { [weak self] candidate in
+                Task { @MainActor in
+                    await self?.sendIceCandidate(candidate)
+                }
+            },
+            onAnswer: { [weak self] answer in
+                Task { @MainActor in
+                    await self?.sendAnswer(answer)
+                }
+            }
+        )
     }
     
     private func sendPresence() async {
@@ -532,18 +635,7 @@ final class WalkieTalkieLink {
         }
         
         // Mic and CallMode come from explicit hold / hands-free intent, not from .waiting
-        audioLayer.setupWebView(
-            onIceCandidate: { [weak self] candidate in
-                Task { @MainActor in
-                    await self?.sendIceCandidate(candidate)
-                }
-            },
-            onAnswer: { [weak self] answer in
-                Task { @MainActor in
-                    await self?.sendAnswer(answer)
-                }
-            }
-        )
+        attachAudioLayer()
         
         applyTalkIntent()
         
@@ -737,18 +829,7 @@ final class WalkieTalkieLink {
             isHeld = true
             handsFree = false
             
-            audioLayer.setupWebView(
-                onIceCandidate: { [weak self] candidate in
-                    Task { @MainActor in
-                        await self?.sendIceCandidate(candidate)
-                    }
-                },
-                onAnswer: { [weak self] answer in
-                    Task { @MainActor in
-                        await self?.sendAnswer(answer)
-                    }
-                }
-            )
+            attachAudioLayer()
             applyTalkIntent()
             
             state = .waiting(started: Date())
@@ -815,18 +896,7 @@ final class WalkieTalkieLink {
             handsFree = true
             isHeld = false
             
-            audioLayer.setupWebView(
-                onIceCandidate: { [weak self] candidate in
-                    Task { @MainActor in
-                        await self?.sendIceCandidate(candidate)
-                    }
-                },
-                onAnswer: { [weak self] answer in
-                    Task { @MainActor in
-                        await self?.sendAnswer(answer)
-                    }
-                }
-            )
+            attachAudioLayer()
             applyTalkIntent()
             
             state = .waiting(started: Date())
@@ -876,9 +946,9 @@ final class WalkieTalkieLink {
         waitingTimer?.cancel()
         
         waitingTimer = Task {
-            try? await Task.sleep(for: .seconds(waitingTimeout))
+            try? await Task.sleep(for: .seconds(self.waitingTimeout))
             if !Task.isCancelled {
-                await waitingTimeout()
+                await self.waitingTimeout()
             }
         }
     }
@@ -929,7 +999,7 @@ final class WalkieTalkieLink {
         iceRefreshTimer = Task {
             try? await Task.sleep(for: .seconds(seconds))
             if !Task.isCancelled {
-                await refreshICE()
+                await self.refreshICE()
             }
         }
     }
@@ -1017,16 +1087,21 @@ final class WalkieTalkieLink {
     }
 
     private func cancelWalkieTasks() {
+        streamGeneration += 1
         eventTask?.cancel()
+        eventSession?.invalidateAndCancel()
+        eventSession = nil
         presenceTask?.cancel()
         waitingTimer?.cancel()
         iceRefreshTimer?.cancel()
         streamHealthTimer?.cancel()
+        bothTunedWatchdog?.cancel()
         eventTask = nil
         presenceTask = nil
         waitingTimer = nil
         iceRefreshTimer = nil
         streamHealthTimer = nil
+        bothTunedWatchdog = nil
     }
 
     private func makeLeaveRequest() -> URLRequest? {
@@ -1079,6 +1154,8 @@ final class WalkieTalkieLink {
         hasPlayedGreet = false
         channelFull = false
         channelFullAttempts = 0
+        bothTunedWatchdog?.cancel()
+        bothTunedWatchdog = nil
         resetTalkIntent()
         state = .disconnected
     }

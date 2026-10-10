@@ -9,6 +9,7 @@ enum WalkieLevelsTest {
         testParseClamps()
         testThrottle()
         testChannelFullBackoff()
+        testSSEKeepaliveLinesRefreshLiveness()
         print("WalkieLevels: all cases passed")
     }
 
@@ -68,5 +69,25 @@ enum WalkieLevelsTest {
         precondition(WalkieProtocol.channelFullBackoff(attempt: 3) == 8, "third 409 is 8s")
         precondition(WalkieProtocol.channelFullBackoff(attempt: 4) == 15, "fourth 409 caps at 15s")
         precondition(WalkieProtocol.channelFullBackoff(attempt: 10) == 15, "later 409 stays at 15s")
+    }
+
+    static func testSSEKeepaliveLinesRefreshLiveness() {
+        precondition(WalkieSSE.streamDeadAfter == 40, "watchdog must be 40s")
+        precondition(
+            WalkieSSE.streamDeadAfter > 2 * WalkieSSE.keepaliveInterval,
+            "watchdog must be over 2× the 15s keepalive"
+        )
+        var buffer = Data(": keepalive\n\n".utf8)
+        let lines = WalkieSSE.pullLines(from: &buffer)
+        precondition(lines.count == 2, "keepalive frame is comment + blank")
+        precondition(WalkieSSE.isCommentLine(lines[0]), ": keepalive is a comment")
+        precondition(lines[1].isEmpty, "SSE comment frame ends with a blank line")
+        precondition(buffer.isEmpty, "keepalive bytes must be fully consumed")
+
+        buffer = Data("event: state\ndata: {\"ok\":true}\n\npartial".utf8)
+        let events = WalkieSSE.pullLines(from: &buffer)
+        precondition(events.count == 3, "event + data + blank")
+        precondition(!WalkieSSE.isCommentLine(events[0]), "event line is not a comment")
+        precondition(String(data: buffer, encoding: .utf8) == "partial", "partial line stays buffered")
     }
 }

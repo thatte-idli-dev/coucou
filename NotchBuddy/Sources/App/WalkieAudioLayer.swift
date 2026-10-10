@@ -14,6 +14,7 @@ protocol WalkieAudioLayer {
     func createOffer(iceServers: [[String: Any]]) async throws -> String
     func handleAnswer(_ answer: String)
     func addIceCandidate(_ candidate: String)
+    func probeCapture() async
     func cleanup()
 }
 

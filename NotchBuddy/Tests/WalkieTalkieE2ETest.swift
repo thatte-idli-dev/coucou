@@ -59,6 +59,15 @@ struct WalkieTalkieE2ETest {
         
         // Test 10: leave-on-quit frees the seat immediately
         try await testLeaveOnQuitFreesSeat(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 11: idle SSE stays up — keepalives must refresh liveness
+        try await testIdleConnectionHolds(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 12: reconnect cancels the old stream and DELETE so the seat is free
+        try await testReconnectFreesOldSeat(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 13: both clients tuned reach inCall
+        try await testBothTunedReachInCall(serverURL: serverURL, accessCode: accessCode)
     }
     
     // MARK: - Test 1: Full Call Flow
@@ -674,6 +683,98 @@ struct WalkieTalkieE2ETest {
         await linkB.disconnect()
         await linkC.disconnect()
         print("✅ Test 10 passed")
+    }
+
+    @MainActor
+    static func testIdleConnectionHolds(serverURL: String, accessCode: String) async throws {
+        print("\n📞 Test 11: Idle connection holds 60s with no reconnect or 409")
+        print("============================================================")
+        
+        let audioA = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("A seated") { linkA.hasSession }
+        
+        let reconnects = linkA.reconnectCount
+        let fulls = linkA.channelFullCount
+        print("⏳ Holding idle for 60s (reconnects=\(reconnects) fulls=\(fulls))...")
+        try await Task.sleep(for: .seconds(60))
+        
+        guard linkA.hasSession else {
+            throw TestError("A lost its session during the 60s idle hold")
+        }
+        guard linkA.reconnectCount == reconnects else {
+            throw TestError("A reconnected during idle (\(linkA.reconnectCount - reconnects) times)")
+        }
+        guard linkA.channelFullCount == fulls else {
+            throw TestError("A saw channel_full during idle")
+        }
+        guard linkA.currentState != .disconnected else {
+            throw TestError("A disconnected during idle")
+        }
+        
+        await linkA.disconnect()
+        print("✅ Test 11 passed")
+    }
+
+    @MainActor
+    static func testReconnectFreesOldSeat(serverURL: String, accessCode: String) async throws {
+        print("\n📞 Test 12: Reconnect frees the old seat")
+        print("========================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("A and B hold seats") {
+            linkA.hasSession && linkB.hasSession
+        }
+        
+        let fullsBefore = linkA.channelFullCount
+        await linkA.forceReconnectForTest()
+        try await waitUntil("A reseated after reconnect", timeoutMS: 6000) {
+            linkA.hasSession && !linkA.isChannelFull
+        }
+        
+        guard linkB.hasSession else {
+            throw TestError("B lost its seat while A reconnected")
+        }
+        guard linkA.channelFullCount == fullsBefore else {
+            throw TestError("A hit 409 on reconnect — old seat was not freed")
+        }
+        
+        await linkA.disconnect()
+        await linkB.disconnect()
+        print("✅ Test 12 passed")
+    }
+
+    @MainActor
+    static func testBothTunedReachInCall(serverURL: String, accessCode: String) async throws {
+        print("\n📞 Test 13: Both clients tuned reach inCall")
+        print("==========================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("A and B hold seats") {
+            linkA.hasSession && linkB.hasSession
+        }
+        
+        await linkA.simulatePTTDown()
+        try await waitUntilWaiting(linkA, label: "Client A")
+        await linkB.simulatePTTDown()
+        try await waitUntilBothInCall(linkA, linkB)
+        
+        await linkA.disconnect()
+        await linkB.disconnect()
+        print("✅ Test 13 passed")
     }
     
     @MainActor

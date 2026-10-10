@@ -189,6 +189,33 @@ enum WalkieProtocol {
     }
 }
 
+/// SSE liveness helpers. Comment lines (`: keepalive`) must count as activity.
+enum WalkieSSE {
+    static let keepaliveInterval: TimeInterval = 15
+    static let streamDeadAfter: TimeInterval = 40
+    static let presenceInterval: TimeInterval = 15
+    static let bothTunedOfferDeadline: TimeInterval = 5
+    static let mediaTimeoutMS = 8000
+
+    /// Pull complete LF (or CRLF) lines from `buffer`, leaving a partial line behind.
+    static func pullLines(from buffer: inout Data) -> [String] {
+        var lines: [String] = []
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            var lineData = buffer[buffer.startIndex..<nl]
+            if lineData.last == 0x0D {
+                lineData = lineData.dropLast()
+            }
+            lines.append(String(data: Data(lineData), encoding: .utf8) ?? "")
+            buffer.removeSubrange(buffer.startIndex...nl)
+        }
+        return lines
+    }
+
+    static func isCommentLine(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).hasPrefix(":")
+    }
+}
+
 /// Parse and throttle walkie analyser level messages (~15 Hz).
 enum WalkieLevels {
     static let minInterval: TimeInterval = 1.0 / 15.0

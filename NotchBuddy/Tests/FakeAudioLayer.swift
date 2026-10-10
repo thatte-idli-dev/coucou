@@ -87,6 +87,8 @@ final class FakeAudioLayer: WalkieAudioLayer {
     func addIceCandidate(_ candidate: String) {
         receivedIceCandidates.append(candidate)
     }
+
+    func probeCapture() async {}
     
     func cleanup() {
         cleanupCalled = true

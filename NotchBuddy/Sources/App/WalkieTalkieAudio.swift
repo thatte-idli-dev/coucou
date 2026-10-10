@@ -173,6 +173,19 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
             }
         }
     }
+
+    func probeCapture() async {
+        guard await checkMicPermission() else {
+            logger.info("probeMic skipped: mic permission not granted")
+            return
+        }
+        do {
+            let result = try await callPageJS("return await probeMic();", arguments: [:])
+            logger.info("probeMic result: \(String(describing: result), privacy: .public)")
+        } catch {
+            logger.error("probeMic failed: \(self.jsErrorDescription(error), privacy: .public)")
+        }
+    }
     
     func cleanup() {
         let wv = webView
@@ -270,8 +283,13 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
         type: WKMediaCaptureType,
         decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
     ) {
+        let host = origin.host
+        let kind = String(describing: type)
         let handler = decisionHandler
-        Task { @MainActor in
+        // Grant on the main queue immediately — a cooperative Task hop can
+        // outlive WebKit's permission request and hang getUserMedia.
+        DispatchQueue.main.async {
+            logger.info("Media capture permission: grant type=\(kind, privacy: .public) origin=\(host, privacy: .public)")
             handler(.grant)
         }
     }
@@ -326,6 +344,10 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
         case "error":
             if let errorMessage = errorMessage {
                 logger.error("WebRTC JS error: \(errorMessage, privacy: .public)")
+            }
+        case "log":
+            if let errorMessage = errorMessage {
+                logger.info("Walkie JS: \(errorMessage, privacy: .public)")
             }
         case "consoleError":
             if let errorMessage = errorMessage {
