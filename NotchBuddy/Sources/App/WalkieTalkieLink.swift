@@ -48,8 +48,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var negotiationID: String?
     private var isSeatA: Bool = false {
         didSet {
-            if isSeatA != oldValue {
-                logger.info("Seat assignment: \(isSeatA ? "A" : "B", privacy: .public) (session: \(sessionID ?? "unknown", privacy: .public))")
+            if self.isSeatA != oldValue {
+                logger.info("Seat assignment: \(self.isSeatA ? "A" : "B", privacy: .public) (session: \(self.sessionID ?? "unknown", privacy: .public))")
             }
         }
     }
