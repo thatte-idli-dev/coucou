@@ -835,10 +835,4 @@ final class WalkieTalkieLink: @unchecked Sendable {
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
-    
-    // MARK: - Test Support
-    
-    func _setAudioLayer(_ layer: WalkieAudioLayer) {
-        self.audioLayer = layer
-    }
 }

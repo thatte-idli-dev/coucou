@@ -9,6 +9,7 @@ extension NSNotification.Name {
     static let walkieDoubleTap = NSNotification.Name("walkieDoubleTap")
     static let walkieTap = NSNotification.Name("walkieTap")
     static let triggerEmote = NSNotification.Name("triggerEmote")
+    static let botGreet = NSNotification.Name("botGreet")
 }
 
 enum BotEmote: String {
@@ -23,4 +24,10 @@ final class SoundEngine {
     func play(_ sound: String) {
         // No-op in tests
     }
+}
+
+// Stub for WalkieTalkieAudio (production uses WalkieTalkieAudioImpl, tests use FakeAudioLayer)
+@MainActor
+final class WalkieTalkieAudio {
+    static let shared: WalkieAudioLayer = FakeAudioLayer()
 }
