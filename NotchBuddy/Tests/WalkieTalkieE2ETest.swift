@@ -67,7 +67,7 @@ struct WalkieTalkieE2ETest {
         // Wait for both to connect
         try await Task.sleep(for: .milliseconds(500))
         
-        guard await linkA.state != .disconnected, await linkB.state != .disconnected else {
+        guard await linkA.currentState != .disconnected, await linkB.currentState != .disconnected else {
             throw TestError("Failed to connect to server")
         }
         
@@ -77,7 +77,7 @@ struct WalkieTalkieE2ETest {
         await linkA.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(500))
         
-        guard case .waiting = await linkA.state else {
+        guard case .waiting = await linkA.currentState else {
             throw TestError("Client A should be waiting")
         }
         
@@ -88,10 +88,10 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(1500))
         
         // Both should now be in call
-        guard case .inCall = await linkA.state else {
+        guard case .inCall = await linkA.currentState else {
             throw TestError("Client A should be in call")
         }
-        guard case .inCall = await linkB.state else {
+        guard case .inCall = await linkB.currentState else {
             throw TestError("Client B should be in call")
         }
         
@@ -126,8 +126,8 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // Both should return to connected/untuned
-        let stateA = await linkA.state
-        let stateB = await linkB.state
+        let stateA = await linkA.currentState
+        let stateB = await linkB.currentState
         guard case .connected(tuned: false) = stateA else {
             throw TestError("Client A should be connected/untuned, got \(stateA)")
         }
@@ -167,7 +167,7 @@ struct WalkieTalkieE2ETest {
         await linkB.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(1500))
         
-        guard case .inCall = await linkA.state, case .inCall = await linkB.state else {
+        guard case .inCall = await linkA.currentState, case .inCall = await linkB.currentState else {
             throw TestError("Failed to establish call")
         }
         
@@ -178,7 +178,7 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // Client A should be untuned
-        guard case .connected(tuned: false) = await linkA.state else {
+        guard case .connected(tuned: false) = await linkA.currentState else {
             throw TestError("Client A should have hung up")
         }
         
@@ -186,7 +186,7 @@ struct WalkieTalkieE2ETest {
         
         // Client B should end call when peer leaves
         try await Task.sleep(for: .milliseconds(500))
-        guard case .connected = await linkB.state else {
+        guard case .connected = await linkB.currentState else {
             throw TestError("Client B should have ended call")
         }
         
@@ -215,7 +215,7 @@ struct WalkieTalkieE2ETest {
         await linkA.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(300))
         
-        guard case .waiting = await linkA.state else {
+        guard case .waiting = await linkA.currentState else {
             throw TestError("Client A should be waiting")
         }
         
@@ -226,7 +226,7 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // Client A should be untuned
-        guard case .connected(tuned: false) = await linkA.state else {
+        guard case .connected(tuned: false) = await linkA.currentState else {
             throw TestError("Client A should have cancelled waiting")
         }
         
@@ -255,7 +255,7 @@ struct WalkieTalkieE2ETest {
         await linkA.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(300))
         
-        guard case .waiting = await linkA.state else {
+        guard case .waiting = await linkA.currentState else {
             throw TestError("Client A should be waiting")
         }
         
@@ -266,7 +266,7 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .seconds(2.5))
         
         // Should have timed out and returned to untuned
-        guard case .connected(tuned: false) = await linkA.state else {
+        guard case .connected(tuned: false) = await linkA.currentState else {
             throw TestError("Client A should have timed out")
         }
         
@@ -300,7 +300,7 @@ struct WalkieTalkieE2ETest {
         await linkB.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(1500))
         
-        guard case .inCall = await linkA.state, case .inCall = await linkB.state else {
+        guard case .inCall = await linkA.currentState, case .inCall = await linkB.currentState else {
             throw TestError("Failed to establish call")
         }
         

@@ -92,6 +92,10 @@ final class WalkieTalkieLink: @unchecked Sendable {
         self.audioLayer = layer
     }
     
+    var currentState: WalkieState {
+        state
+    }
+    
     func configure(serverURL: String?, accessCode: String?) async {
         guard let code = accessCode, !code.isEmpty else {
             self.serverURL = nil
