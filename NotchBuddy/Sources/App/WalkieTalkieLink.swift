@@ -356,7 +356,12 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     private func startNegotiation() async {
         // Allow .waiting state - user is PTT-holding
-        guard case .connected = state else if case .waiting = state {} else { return }
+        switch state {
+        case .connected, .waiting:
+            break
+        case .disconnected, .inCall:
+            return
+        }
         guard peerTuned else { return }
         
         let hasPermission = await audioLayer.checkMicPermission()
