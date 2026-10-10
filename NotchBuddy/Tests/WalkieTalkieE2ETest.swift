@@ -67,7 +67,7 @@ struct WalkieTalkieE2ETest {
         // Wait for both to connect
         try await Task.sleep(for: .milliseconds(500))
         
-        guard await linkA.currentState != .disconnected, await linkB.currentState != .disconnected else {
+        guard linkA.currentState != .disconnected, linkB.currentState != .disconnected else {
             throw TestError("Failed to connect to server")
         }
         
@@ -77,7 +77,7 @@ struct WalkieTalkieE2ETest {
         await linkA.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(500))
         
-        guard case .waiting = await linkA.currentState else {
+        guard case .waiting = linkA.currentState else {
             throw TestError("Client A should be waiting")
         }
         
@@ -88,10 +88,10 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(1500))
         
         // Both should now be in call
-        guard case .inCall = await linkA.currentState else {
+        guard case .inCall = linkA.currentState else {
             throw TestError("Client A should be in call")
         }
-        guard case .inCall = await linkB.currentState else {
+        guard case .inCall = linkB.currentState else {
             throw TestError("Client B should be in call")
         }
         
@@ -126,8 +126,8 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // Both should return to connected/untuned
-        let stateA = await linkA.currentState
-        let stateB = await linkB.currentState
+        let stateA = linkA.currentState
+        let stateB = linkB.currentState
         guard case .connected(tuned: false) = stateA else {
             throw TestError("Client A should be connected/untuned, got \(stateA)")
         }
@@ -138,8 +138,8 @@ struct WalkieTalkieE2ETest {
         print("✓ Both clients returned to untuned")
         
         // Cleanup
-        // Cleanup not needed - test process will end
-        // Cleanup not needed - test process will end
+        await linkA.disconnect()
+        await linkB.disconnect()
         
         print("✅ Test 1 passed")
     }
@@ -167,7 +167,7 @@ struct WalkieTalkieE2ETest {
         await linkB.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(1500))
         
-        guard case .inCall = await linkA.currentState, case .inCall = await linkB.currentState else {
+        guard case .inCall = linkA.currentState, case .inCall = linkB.currentState else {
             throw TestError("Failed to establish call")
         }
         
@@ -178,7 +178,7 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // Client A should be untuned
-        guard case .connected(tuned: false) = await linkA.currentState else {
+        guard case .connected(tuned: false) = linkA.currentState else {
             throw TestError("Client A should have hung up")
         }
         
@@ -186,14 +186,14 @@ struct WalkieTalkieE2ETest {
         
         // Client B should end call when peer leaves
         try await Task.sleep(for: .milliseconds(500))
-        guard case .connected = await linkB.currentState else {
+        guard case .connected = linkB.currentState else {
             throw TestError("Client B should have ended call")
         }
         
         print("✓ Client B ended call when peer left")
         
-        // Cleanup not needed - test process will end
-        // Cleanup not needed - test process will end
+        await linkA.disconnect()
+        await linkB.disconnect()
         
         print("✅ Test 2 passed")
     }
@@ -215,7 +215,7 @@ struct WalkieTalkieE2ETest {
         await linkA.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(300))
         
-        guard case .waiting = await linkA.currentState else {
+        guard case .waiting = linkA.currentState else {
             throw TestError("Client A should be waiting")
         }
         
@@ -226,13 +226,13 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .milliseconds(500))
         
         // Client A should be untuned
-        guard case .connected(tuned: false) = await linkA.currentState else {
+        guard case .connected(tuned: false) = linkA.currentState else {
             throw TestError("Client A should have cancelled waiting")
         }
         
         print("✓ Client A cancelled waiting")
         
-        // Cleanup not needed - test process will end
+        await linkA.disconnect()
         
         print("✅ Test 3 passed")
     }
@@ -255,7 +255,7 @@ struct WalkieTalkieE2ETest {
         await linkA.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(300))
         
-        guard case .waiting = await linkA.currentState else {
+        guard case .waiting = linkA.currentState else {
             throw TestError("Client A should be waiting")
         }
         
@@ -266,13 +266,13 @@ struct WalkieTalkieE2ETest {
         try await Task.sleep(for: .seconds(2.5))
         
         // Should have timed out and returned to untuned
-        guard case .connected(tuned: false) = await linkA.currentState else {
+        guard case .connected(tuned: false) = linkA.currentState else {
             throw TestError("Client A should have timed out")
         }
         
         print("✓ Client A timed out correctly")
         
-        // Cleanup not needed - test process will end
+        await linkA.disconnect()
         
         print("✅ Test 4 passed")
     }
@@ -300,7 +300,7 @@ struct WalkieTalkieE2ETest {
         await linkB.simulatePTTDown()
         try await Task.sleep(for: .milliseconds(1500))
         
-        guard case .inCall = await linkA.currentState, case .inCall = await linkB.currentState else {
+        guard case .inCall = linkA.currentState, case .inCall = linkB.currentState else {
             throw TestError("Failed to establish call")
         }
         
@@ -345,8 +345,8 @@ struct WalkieTalkieE2ETest {
         
         print("✓ TURN credentials verified")
         
-        // Cleanup not needed - test process will end
-        // Cleanup not needed - test process will end
+        await linkA.disconnect()
+        await linkB.disconnect()
         
         print("✅ Test 5 passed")
     }
@@ -367,11 +367,6 @@ struct TestError: Error, CustomStringConvertible {
 // MARK: - WalkieTalkieLink Test Extensions
 
 extension WalkieTalkieLink {
-    convenience init(audioLayer: WalkieAudioLayer) {
-        self.init()
-        self._setAudioLayer(audioLayer)
-    }
-    
     func simulatePTTDown() async {
         NotificationCenter.default.post(name: .walkiePTTDown, object: nil)
         try? await Task.sleep(for: .milliseconds(50))

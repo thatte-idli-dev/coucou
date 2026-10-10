@@ -18,7 +18,7 @@ enum WalkieState: Equatable, Sendable {
 
 final class WalkieTalkieLink: @unchecked Sendable {
     @MainActor
-    static let shared = WalkieTalkieLink()
+    static let shared = WalkieTalkieLink(audioLayer: WalkieTalkieAudio.shared)
     
     private var state: WalkieState = .disconnected
     private var sessionID: String?
@@ -51,8 +51,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
     var waitingTimeout: TimeInterval = 30  // Injectable for tests
     
     @MainActor
-    private init() {
-        self.audioLayer = WalkieTalkieAudio.shared
+    init(audioLayer: WalkieAudioLayer) {
+        self.audioLayer = audioLayer
         
         NotificationCenter.default.addObserver(
             forName: .walkiePTTDown,
@@ -85,11 +85,6 @@ final class WalkieTalkieLink: @unchecked Sendable {
         ) { [weak self] _ in
             Task { await self?.handleTap() }
         }
-    }
-    
-    // For testing
-    func _setAudioLayer(_ layer: WalkieAudioLayer) {
-        self.audioLayer = layer
     }
     
     var currentState: WalkieState {
@@ -768,7 +763,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         await sendPresence()
     }
     
-    private func disconnect() async {
+    func disconnect() async {
         eventTask?.cancel()
         presenceTask?.cancel()
         waitingTimer?.cancel()
