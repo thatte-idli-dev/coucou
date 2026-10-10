@@ -23,6 +23,7 @@ struct IslandRootView: View {
 struct IslandContainer: View {
     @ObservedObject var state: AppState
     @ObservedObject private var demoEngine = DemoEngine.shared
+    @ObservedObject private var walkie = WalkieIslandState.shared
     @State private var islandWidth:  CGFloat = IslandConst.notchWidth
     @State private var islandHeight: CGFloat = IslandConst.notchHeight
     @State private var cornerRadius: CGFloat = IslandConst.roundedCorner
@@ -106,6 +107,16 @@ struct IslandContainer: View {
                 .animation(.easeInOut(duration: 0.25), value: uploadActive || greetingActive)
 
             CountdownBar(state: state, islandW: islandWidth)
+
+            if walkie.presentation != .hidden {
+                WalkieCallBadge(presentation: walkie.presentation, level: walkie.displayedLevel)
+                    .position(
+                        x: state.mode == .expanded ? islandWidth / 2 : min(islandWidth - 78, max(96, islandWidth * 0.58)),
+                        y: state.mode == .expanded ? 20 : islandHeight / 2
+                    )
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: walkie.presentation)
+            }
 
             if demoEngine.isActive {
                 Text(verbatim: "DEMO")

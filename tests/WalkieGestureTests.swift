@@ -9,6 +9,13 @@ enum WalkieGestureTests {
         testDoubleTapNotMisreadAsTapHangup()
         testKeyRepeatDebounce()
         testHoldThresholdExact()
+        testTapThenHold()
+        testSlowDoubleTap()
+        testHoldReleaseUntunes()
+        testIdleSingleTapDoesNotLatch()
+        testDoubleTapLatchesHandsFree()
+        testSingleTapLeavesHandsFree()
+        testComboReleaseOnAnyKey()
         print("WalkieGestureClassifier: all cases passed")
     }
 
@@ -143,5 +150,124 @@ enum WalkieGestureTests {
         // Key up at t=1200
         let e3 = c.keyUp(at: 1200)
         precondition(e3 == .pttUp, "keyUp after threshold must emit pttUp")
+    }
+
+    // MARK: - testTapThenHold
+    
+    static func testTapThenHold() {
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        
+        // First tap: down at t=0, up at t=100
+        _ = c.keyDown(at: 0)
+        let e1 = c.keyUp(at: 100)
+        precondition(e1 == nil, "first tap keyUp waits")
+        
+        // Second press (hold): down at t=200 (within double-tap window)
+        let e2 = c.keyDown(at: 200)
+        precondition(e2 == nil, "second keyDown within window")
+        
+        // Hold crosses threshold at t=380
+        let e3 = c.checkHoldThreshold(at: 380)
+        precondition(e3 == .pttDown, "hold threshold emits pttDown")
+        
+        // CRITICAL: No tap should be emitted while key is held
+        let e4 = c.checkTapTimeout(at: 700)
+        precondition(e4 == nil, "tap must not emit during hold - first tap was cancelled by second press")
+        
+        // Key up at t=1000
+        let e5 = c.keyUp(at: 1000)
+        precondition(e5 == .pttUp, "keyUp after hold emits pttUp")
+        
+        // Still no tap after release
+        let e6 = c.checkTapTimeout(at: 1500)
+        precondition(e6 == nil, "no tap after pttUp")
+    }
+
+    // MARK: - testSlowDoubleTap
+    
+    static func testSlowDoubleTap() {
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        
+        // First tap: down at t=0, up at t=100
+        _ = c.keyDown(at: 0)
+        let e1 = c.keyUp(at: 100)
+        precondition(e1 == nil, "first tap keyUp waits")
+        
+        // Second tap: down at t=450 (within 500ms window, but slow)
+        let e2 = c.keyDown(at: 450)
+        precondition(e2 == nil, "second keyDown")
+        
+        // Second tap up at t=550 (duration=100ms, short tap)
+        let e3 = c.keyUp(at: 550)
+        precondition(e3 == .doubleTap, "slow but valid double-tap emits doubleTap")
+        
+        // No tap event should follow
+        let e4 = c.checkTapTimeout(at: 1100)
+        precondition(e4 == nil, "no tap after doubleTap")
+    }
+
+    static func testHoldReleaseUntunes() {
+        var phase: WalkieSessionPhase = .idle
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        _ = c.keyDown(at: 0)
+        precondition(c.checkHoldThreshold(at: 180) == .pttDown, "hold starts")
+        phase = WalkieGestureMapping.apply(phase, event: .pttDown)
+        precondition(phase == .waiting(handsFree: false), "hold tunes waiting")
+        precondition(c.keyUp(at: 400) == .pttUp, "release ends hold")
+        phase = WalkieGestureMapping.apply(phase, event: .pttUp)
+        precondition(phase == .idle, "hold then release untunes")
+    }
+
+    static func testIdleSingleTapDoesNotLatch() {
+        var phase: WalkieSessionPhase = .idle
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        _ = c.keyDown(at: 0)
+        precondition(c.keyUp(at: 80) == nil, "short up waits for second tap")
+        precondition(c.checkTapTimeout(at: 600) == .tap, "lone tap resolves as singleTap")
+        phase = WalkieGestureMapping.apply(phase, event: .tap)
+        precondition(phase == .idle, "idle single tap must not stay tuned")
+    }
+
+    static func testDoubleTapLatchesHandsFree() {
+        var phase: WalkieSessionPhase = .idle
+        let c = WalkieGestureClassifier(doubleTapInterval: 0.5)
+        _ = c.keyDown(at: 0)
+        _ = c.keyUp(at: 80)
+        _ = c.keyDown(at: 200)
+        precondition(c.keyUp(at: 280) == .doubleTap, "two quick taps")
+        phase = WalkieGestureMapping.apply(phase, event: .doubleTap)
+        precondition(phase == .waiting(handsFree: true), "double-tap latches hands-free")
+        phase = WalkieGestureMapping.apply(phase, event: .pttUp)
+        precondition(phase == .waiting(handsFree: true), "key-up after double-tap stays latched")
+    }
+
+    static func testSingleTapLeavesHandsFree() {
+        var phase: WalkieSessionPhase = .waiting(handsFree: true)
+        phase = WalkieGestureMapping.apply(phase, event: .tap)
+        precondition(phase == .idle, "single tap leaves hands-free waiting")
+        phase = .inCall(handsFree: true, transmitting: true)
+        phase = WalkieGestureMapping.apply(phase, event: .tap)
+        precondition(phase == .idle, "single tap leaves hands-free call")
+    }
+
+    static func testComboReleaseOnAnyKey() {
+        let spec = ShortcutSpec(keyCode: 40, nsFlags: ShortcutSpec.ctrlOpt)
+        let held = ShortcutSpec.ctrlBit | ShortcutSpec.optBit
+        precondition(
+            WalkieGestureMapping.comboStillHeld(spec: spec, hidFlags: held, keyIsDown: true),
+            "K + Control-Option is held"
+        )
+        precondition(
+            !WalkieGestureMapping.comboStillHeld(spec: spec, hidFlags: held, keyIsDown: false),
+            "letting go of K is a release"
+        )
+        precondition(
+            !WalkieGestureMapping.comboStillHeld(spec: spec, hidFlags: ShortcutSpec.optBit, keyIsDown: true),
+            "letting go of Control is a release"
+        )
+        precondition(
+            !WalkieGestureMapping.comboStillHeld(spec: spec, hidFlags: ShortcutSpec.ctrlBit, keyIsDown: true),
+            "letting go of Option is a release"
+        )
     }
 }

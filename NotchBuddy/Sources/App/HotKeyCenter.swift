@@ -1,5 +1,8 @@
 import AppKit
 import Carbon.HIToolbox
+import os.log
+
+private let walkieHotKeyLogger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 // MARK: - C-level event handler
 //
@@ -34,6 +37,9 @@ private func coucouHotKeyEventHandler(
     guard err == noErr, let action = gHotKeyTable[hkid.id] else {
         return OSStatus(eventNotHandledErr)
     }
+    if action == .walkie {
+        walkieHotKeyLogger.info("Hotkey raw: walkie \(isPressed ? "down" : "up", privacy: .public) (carbon \(isPressed ? "pressed" : "released", privacy: .public))")
+    }
     // Carbon events are dispatched on the main thread.
     MainActor.assumeIsolated { gOnAction?(action, isPressed) }
     return noErr
@@ -56,6 +62,9 @@ final class HotKeyCenter {
 
     // Live registered refs (action → EventHotKeyRef)
     private var refs: [ShortcutAction: EventHotKeyRef] = [:]
+    private var walkieComboWatch: Timer?
+    private var walkiePhysicallyDown = false
+    private var walkieWatchStarted: Date?
 
     /// Actions whose `RegisterEventHotKey` call failed (system conflict).
     private(set) var conflicts: Set<ShortcutAction> = []
@@ -65,7 +74,12 @@ final class HotKeyCenter {
     /// Start the hot-key engine and fire `onAction` whenever the user presses a registered shortcut.
     /// Safe to call more than once — the handler is installed only once.
     func start(onAction: @escaping @MainActor (ShortcutAction, Bool) -> Void) {
-        gOnAction = onAction
+        gOnAction = { [weak self] action, isPressed in
+            if action == .walkie {
+                self?.noteWalkieCarbon(isPressed: isPressed)
+            }
+            onAction(action, isPressed)
+        }
 
         if gHotKeyHandler == nil {
             var specs = [
@@ -85,8 +99,73 @@ final class HotKeyCenter {
         registerAll()
     }
 
+    /// HID snapshot: the walkie key AND every required modifier are still down.
+    static func isWalkieComboPhysicallyHeld() -> Bool {
+        let spec = ShortcutLogic.hotKey(for: .walkie)
+        let hidFlags = UInt(CGEventSource.flagsState(.hidSystemState).rawValue)
+        let keyIsDown = CGEventSource.keyState(.hidSystemState, key: CGKeyCode(spec.keyCode))
+        return WalkieGestureMapping.comboStillHeld(spec: spec, hidFlags: hidFlags, keyIsDown: keyIsDown)
+    }
+
+    private func noteWalkieCarbon(isPressed: Bool) {
+        if isPressed {
+            self.walkiePhysicallyDown = true
+            self.walkieWatchStarted = Date()
+            self.startWalkieComboWatch()
+        } else {
+            self.walkiePhysicallyDown = false
+            self.walkieWatchStarted = nil
+            self.stopWalkieComboWatch()
+        }
+    }
+
+    private func startWalkieComboWatch() {
+        self.stopWalkieComboWatch()
+        // Carbon often swallows kEventHotKeyReleased when K goes up while
+        // Control-Option are still held (or the reverse). Poll HID.
+        self.walkieComboWatch = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.pollWalkieCombo()
+            }
+        }
+        if let watch = self.walkieComboWatch {
+            RunLoop.main.add(watch, forMode: .common)
+        }
+    }
+
+    private func stopWalkieComboWatch() {
+        self.walkieComboWatch?.invalidate()
+        self.walkieComboWatch = nil
+    }
+
+    private func pollWalkieCombo() {
+        guard self.walkiePhysicallyDown else { return }
+        let spec = ShortcutLogic.hotKey(for: .walkie)
+        let hidFlags = UInt(CGEventSource.flagsState(.hidSystemState).rawValue)
+        let keyIsDown = CGEventSource.keyState(.hidSystemState, key: CGKeyCode(spec.keyCode))
+        if !WalkieGestureMapping.modifiersStillHeld(spec: spec, hidFlags: hidFlags) {
+            self.synthesizeWalkieUp(reason: "modifier released")
+            return
+        }
+        let elapsed = Date().timeIntervalSince(self.walkieWatchStarted ?? Date())
+        if elapsed >= 0.08 && !keyIsDown {
+            self.synthesizeWalkieUp(reason: "key released")
+        }
+    }
+
+    private func synthesizeWalkieUp(reason: String) {
+        walkieHotKeyLogger.info("Hotkey raw: walkie up (combo released, \(reason, privacy: .public))")
+        self.walkiePhysicallyDown = false
+        self.walkieWatchStarted = nil
+        self.stopWalkieComboWatch()
+        gOnAction?(.walkie, false)
+    }
+
     /// Unregister every hot key. Called on app quit.
     func unregisterAll() {
+        self.stopWalkieComboWatch()
+        self.walkiePhysicallyDown = false
+        self.walkieWatchStarted = nil
         for (action, ref) in refs {
             UnregisterEventHotKey(ref)
             let idx = UInt32(ShortcutAction.allCases.firstIndex(of: action)!)

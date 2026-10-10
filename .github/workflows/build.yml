@@ -2,13 +2,21 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'cursor/walkie-talkie-voice-client-*'
   pull_request:
-    branches: [main]
+    branches: 
+      - main
+      - 'cursor/walkie-talkie-gestures-*'
+      - 'cursor/walkie-talkie-voice-client-*'
 
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +83,35 @@ jobs:
       - name: Claude settings file tests
         run: bash scripts/test-claude-settings.sh
 
+      - name: Walkie-talkie state tests
+        run: bash scripts/test-walkie-talkie-state.sh
+
+      - name: Walkie-talkie protocol tests
+        run: bash scripts/test-walkie-talkie-protocol.sh
+
+      - name: Walkie-talkie protocol state parsing test
+        run: bash scripts/test-walkie-protocol-state.sh
+
+      - name: Walkie-talkie level message tests
+        run: bash scripts/test-walkie-levels.sh
+
+      - name: Walkie-talkie WebKit bridge test
+        timeout-minutes: 3
+        run: bash scripts/test-webkit-bridge.sh
+
+      - name: Walkie mic harness typecheck
+        run: bash scripts/test-walkie-mic-harness.sh
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Walkie-talkie E2E signaling test
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/test-walkie-talkie-e2e.sh
+
       - name: Build
         run: |
           xcodebuild \
@@ -123,3 +160,108 @@ jobs:
             -destination 'generic/platform=iOS' \
             build \
             CODE_SIGNING_ALLOWED=NO
+
+      - name: Build downloadable walkie-talkie test build
+        run: |
+          xcodebuild \
+            -project NotchBuddy/NotchBuddy.xcodeproj \
+            -scheme NotchBuddy \
+            -configuration Release \
+            -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Ad-hoc codesign with mic entitlement
+        run: |
+          PRODUCTS_DIR="DerivedData/Build/Products/Release"
+          APP_PATH="${PRODUCTS_DIR}/Coucou.app"
+          if [ ! -d "$APP_PATH" ]; then
+            APP_PATH=$(find "$PRODUCTS_DIR" -maxdepth 1 -name "*.app" -type d | head -1)
+          fi
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "::error::No .app found under ${PRODUCTS_DIR} (expected Coucou.app)"
+            ls -la "$PRODUCTS_DIR" || true
+            find DerivedData/Build/Products -name "*.app" -type d || true
+            exit 1
+          fi
+          echo "Signing app at: $APP_PATH"
+
+          cat > /tmp/entitlements.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.security.device.audio-input</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          codesign --force --deep --sign - --entitlements /tmp/entitlements.plist "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
+
+          echo "=== Entitlements ==="
+          codesign -d --entitlements :- "$APP_PATH"
+          if ! codesign -d --entitlements :- "$APP_PATH" | grep -q "com.apple.security.device.audio-input"; then
+            echo "::error::Missing com.apple.security.device.audio-input entitlement"
+            exit 1
+          fi
+
+      - name: Zip app bundle
+        run: |
+          cd DerivedData/Build/Products/Release
+          APP=$(ls -d Coucou.app 2>/dev/null || ls -d *.app 2>/dev/null | head -1)
+          if [ -z "$APP" ] || [ ! -d "$APP" ]; then
+            echo "::error::No .app found under Products/Release (expected Coucou.app)"
+            ls -la
+            exit 1
+          fi
+          ditto -c -k --keepParent "$APP" Coucou.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coucou
+          path: DerivedData/Build/Products/Release/Coucou.zip
+
+      - name: Create prerelease
+        if: startsWith(github.head_ref || github.ref_name, 'cursor/walkie-talkie-voice-client-')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          TAG_NAME="walkie-test-${SHORT_SHA}"
+          ZIP_NAME="Coucou.zip"
+          ZIP_PATH="DerivedData/Build/Products/Release/${ZIP_NAME}"
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${ZIP_NAME}"
+
+          cat > /tmp/release-notes.md <<EOF
+          # Walkie-Talkie Test Build
+
+          **⚠️ Ad-hoc signed app - First Launch Instructions:**
+          1. Download \`${ZIP_NAME}\`
+          2. Extract the app
+          3. Right-click on Coucou.app and select "Open"
+          4. Click "Open" in the security dialog
+
+          Built from commit ${GITHUB_SHA} on branch ${GITHUB_REF_NAME}
+
+          This is an ad-hoc signed test build for walkie-talkie feature testing.
+
+          **Release URL:** https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG_NAME}
+          **Direct download:** ${DOWNLOAD_URL}
+          EOF
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} already exists; uploading ${ZIP_NAME} with --clobber"
+            gh release upload "$TAG_NAME" "$ZIP_PATH" --clobber
+          elif ! gh release create "$TAG_NAME" \
+              "$ZIP_PATH" \
+              --title "Walkie Test ${SHORT_SHA}" \
+              --notes-file /tmp/release-notes.md \
+              --prerelease; then
+            echo "Create raced with another run; uploading ${ZIP_NAME} with --clobber"
+            gh release upload "$TAG_NAME" "$ZIP_PATH" --clobber
+          fi
+
+          echo "::notice title=Release asset::${DOWNLOAD_URL}"

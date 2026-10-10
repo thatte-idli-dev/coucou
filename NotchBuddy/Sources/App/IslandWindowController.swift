@@ -1,6 +1,9 @@
 import AppKit
 import Combine
 import SwiftUI
+import os.log
+
+private let walkieGestureLogger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 @MainActor
 final class IslandWindowController: NSWindowController {
@@ -275,7 +278,9 @@ final class IslandWindowController: NSWindowController {
             self?.fsm.greetComplete()
         }
 
-        fsm.isHeldOpen = { AppState.shared.pendingApproval != nil }
+        fsm.isHeldOpen = {
+            AppState.shared.pendingApproval != nil || WalkieIslandState.shared.holdsIsland
+        }
     }
 
     // MARK: - Polling loop
@@ -555,11 +560,12 @@ final class IslandWindowController: NSWindowController {
         let nowMS = Int64(Date().timeIntervalSince1970 * 1000)
         
         if isPressed {
-            if let event = walkieClassifier.keyDown(at: nowMS) {
-                postWalkieEvent(event)
+            walkieGestureLogger.info("Hotkey raw: walkie down")
+            if let event = self.walkieClassifier.keyDown(at: nowMS) {
+                self.postWalkieEvent(event)
             }
-            walkieCheckTimer?.invalidate()
-            walkieCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            self.walkieCheckTimer?.invalidate()
+            self.walkieCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 let now = Int64(Date().timeIntervalSince1970 * 1000)
                 if let e = self.walkieClassifier.checkHoldThreshold(at: now) {
@@ -572,20 +578,35 @@ final class IslandWindowController: NSWindowController {
                 }
             }
         } else {
-            if let event = walkieClassifier.keyUp(at: nowMS) {
-                postWalkieEvent(event)
+            walkieGestureLogger.info("Hotkey raw: walkie up")
+            if let event = self.walkieClassifier.keyUp(at: nowMS) {
+                self.postWalkieEvent(event)
+            }
+            if !self.walkieClassifier.hasPendingTap {
+                self.walkieCheckTimer?.invalidate()
+                self.walkieCheckTimer = nil
             }
         }
     }
 
     private func postWalkieEvent(_ event: WalkieGestureClassifier.Event) {
+        let label: String
         let name: Notification.Name
         switch event {
-        case .pttDown:   name = .walkiePTTDown
-        case .pttUp:     name = .walkiePTTUp
-        case .doubleTap: name = .walkieDoubleTap
-        case .tap:       name = .walkieTap
+        case .pttDown:
+            label = "holdStart"
+            name = .walkiePTTDown
+        case .pttUp:
+            label = "holdEnd"
+            name = .walkiePTTUp
+        case .doubleTap:
+            label = "doubleTap"
+            name = .walkieDoubleTap
+        case .tap:
+            label = "singleTap"
+            name = .walkieTap
         }
+        walkieGestureLogger.info("Walkie gesture: \(label, privacy: .public) durationMs=\(self.walkieClassifier.lastDurationMS, privacy: .public)")
         NotificationCenter.default.post(name: name, object: nil)
     }
 
@@ -1302,6 +1323,11 @@ extension Notification.Name {
     static let botSetTgEs       = Notification.Name("notchBuddy.botSetTgEs")
     static let botGulp          = Notification.Name("notchBuddy.botGulp")
     static let botMorphTo       = Notification.Name("notchBuddy.botMorphTo")
+    
+    static let walkiePTTDown    = Notification.Name("notchBuddy.walkiePTTDown")
+    static let walkiePTTUp      = Notification.Name("notchBuddy.walkiePTTUp")
+    static let walkieDoubleTap  = Notification.Name("notchBuddy.walkieDoubleTap")
+    static let walkieTap        = Notification.Name("notchBuddy.walkieTap")
     static let islandAction     = Notification.Name("notchBuddy.islandAction")
     static let islandCollapse      = Notification.Name("notchBuddy.islandCollapse")
     static let islandSendMessage   = Notification.Name("notchBuddy.islandSendMessage")
@@ -1317,11 +1343,6 @@ extension Notification.Name {
     static let greetingHover    = Notification.Name("notchBuddy.greetingHover")
     static let greetingInterrupt = Notification.Name("notchBuddy.greetingInterrupt")
     static let openWardrobeFromDesktop = Notification.Name("notchBuddy.openWardrobeFromDesktop")
-    // Walkie-talkie gestures
-    static let walkiePTTDown    = Notification.Name("notchBuddy.walkiePTTDown")
-    static let walkiePTTUp      = Notification.Name("notchBuddy.walkiePTTUp")
-    static let walkieDoubleTap  = Notification.Name("notchBuddy.walkieDoubleTap")
-    static let walkieTap        = Notification.Name("notchBuddy.walkieTap")
     // Island moved to another screen (resting size may differ: notch vs bar)
     static let islandScreenChanged = Notification.Name("notchBuddy.islandScreenChanged")
 }

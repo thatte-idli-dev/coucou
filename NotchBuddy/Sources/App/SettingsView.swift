@@ -98,6 +98,10 @@ struct SettingsView: View {
     @State private var resendFrom: String   = KeychainStore.shared.get("resend-from")     ?? ""
     @State private var n8nUrl: String       = KeychainStore.shared.get("n8n-url")         ?? ""
     @State private var n8nKey: String       = KeychainStore.shared.get("n8n-api-key")     ?? ""
+    
+    @State private var walkieServerURL: String = Keychain.load(key: "walkie-server-url")
+        ?? UserDefaults.standard.string(forKey: "walkie-server-url") ?? ""
+    @State private var walkieAccessCode: String = Keychain.load(key: "walkie-access-code") ?? ""
     @State private var vercelToken: String  = KeychainStore.shared.get("vercel-token")    ?? ""
     @State private var githubToken: String  = KeychainStore.shared.get("github-token")    ?? ""
     @State private var stripeKey: String    = KeychainStore.shared.get("stripe-api-key")  ?? ""
@@ -177,6 +181,7 @@ struct SettingsView: View {
                         SettingsSidebarRow(title: "Agents",       icon: "terminal.fill",                     color: "#3B9EFF").tag("agents")
                         SettingsSidebarRow(title: "Chat",         icon: "bubble.left.and.bubble.right.fill", color: "#E07950").tag("chat")
                         SettingsSidebarRow(title: "Integrations", icon: "puzzlepiece.extension.fill",        color: "#7C5CFF").tag("integrations")
+                        SettingsSidebarRow(title: "Walkie-Talkie", icon: "waveform",                         color: "#10B981").tag("walkie")
                         SettingsSidebarRow(title: "Shortcuts",    icon: "keyboard.fill",                     color: "#6366F1").tag("shortcuts")
                     }
                     .listStyle(.sidebar)
@@ -245,6 +250,7 @@ struct SettingsView: View {
         case "agents":       return String(localized: "Agents")
         case "chat":         return String(localized: "Chat")
         case "integrations": return String(localized: "Integrations")
+        case "walkie":       return "Walkie-Talkie"
         case "shortcuts":    return String(localized: "Shortcuts")
         default:             return String(localized: "General")
         }
@@ -256,6 +262,7 @@ struct SettingsView: View {
         case "agents":       agentsSection
         case "chat":         chatSection
         case "integrations": integrationsSection
+        case "walkie":       walkieSection
         case "shortcuts":    ShortcutsSettingsView()
         default:             generalSection
         }
@@ -1247,6 +1254,30 @@ struct SettingsView: View {
             .padding(6)
         }
     }
+    
+    @ViewBuilder private var walkieSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color(hex: "#10B981")).frame(width: 8, height: 8)
+                        Text("Talky-Talky Server").font(.system(size: 12, weight: .semibold))
+                    }
+                    TextField("Server URL  (https://…)", text: $walkieServerURL)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField("Access code", text: $walkieAccessCode)
+                        .textFieldStyle(.roundedBorder)
+                    Text("Channel 1, 2 seats. Press the hotkey to tune and go live immediately.")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                }
+                
+                Button("Save") { saveWalkieSettings() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(6)
+        }
+    }
 
     // MARK: - Actions
 
@@ -1711,6 +1742,19 @@ struct SettingsView: View {
         } else {
             KeychainStore.shared.set(key, value: value)
         }
+    }
+    
+    private func saveWalkieSettings() {
+        Keychain.saveWalkie(key: "walkie-server-url", value: walkieServerURL)
+        Keychain.saveWalkie(key: "walkie-access-code", value: walkieAccessCode)
+        UserDefaults.standard.set(walkieServerURL, forKey: "walkie-server-url")
+        Task {
+            await WalkieTalkieLink.shared.configure(
+                serverURL: walkieServerURL.isEmpty ? nil : walkieServerURL,
+                accessCode: walkieAccessCode.isEmpty ? nil : walkieAccessCode
+            )
+        }
+        statusMessage = "Walkie-talkie settings saved"
     }
 
     // MARK: - Vercel project list

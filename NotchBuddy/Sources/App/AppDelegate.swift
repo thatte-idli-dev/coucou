@@ -1,5 +1,8 @@
 import AppKit
 import SwiftUI
+import os.log
+
+private let walkieLogger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -8,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var demoMenuItem: NSMenuItem?
 
     func applicationWillTerminate(_ notification: Notification) {
+        WalkieTalkieLink.shared.shutdown()
         DemoEngine.shared.stop()
         HotKeyCenter.shared.unregisterAll()
     }
@@ -23,6 +27,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         let debugMenu = NSMenu(title: "Debug")
         debugMenu.addItem(NSMenuItem(title: "Render recap image", action: #selector(renderRecapImage), keyEquivalent: ""))
+        
+        let walkieMenu = NSMenu(title: "Walkie-Talkie")
+        walkieMenu.addItem(NSMenuItem(title: "PTT Down", action: #selector(debugWalkiePTTDown), keyEquivalent: ""))
+        walkieMenu.addItem(NSMenuItem(title: "PTT Up", action: #selector(debugWalkiePTTUp), keyEquivalent: ""))
+        walkieMenu.addItem(NSMenuItem(title: "Double Tap", action: #selector(debugWalkieDoubleTap), keyEquivalent: ""))
+        walkieMenu.addItem(NSMenuItem(title: "Single Tap", action: #selector(debugWalkieTap), keyEquivalent: ""))
+        let walkieMenuItem = NSMenuItem(title: "Walkie-Talkie", action: nil, keyEquivalent: "")
+        walkieMenuItem.submenu = walkieMenu
+        debugMenu.addItem(walkieMenuItem)
+        
         let debugMenuItem = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
         debugMenuItem.submenu = debugMenu
         NSApp.mainMenu?.addItem(debugMenuItem)
@@ -128,6 +142,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Debug helpers
 
     #if DEBUG
+    @objc func debugWalkiePTTDown() {
+        NotificationCenter.default.post(name: .walkiePTTDown, object: nil)
+    }
+    
+    @objc func debugWalkiePTTUp() {
+        NotificationCenter.default.post(name: .walkiePTTUp, object: nil)
+    }
+    
+    @objc func debugWalkieDoubleTap() {
+        NotificationCenter.default.post(name: .walkieDoubleTap, object: nil)
+    }
+    
+    @objc func debugWalkieTap() {
+        NotificationCenter.default.post(name: .walkieTap, object: nil)
+    }
+    
     @objc func renderRecapImage() {
         let summary = RecapStore.shared.weeklySummary() ?? WeeklySummary(
             weekStart: Date(), weekEnd: Date(),
@@ -215,6 +245,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = MusicController.shared
         _ = SpotifyController.shared
         #endif
+        
+        Task {
+            let urlOutcome = Keychain.loadOutcome(key: "walkie-server-url")
+            let codeOutcome = Keychain.loadOutcome(key: "walkie-access-code")
+            logWalkieKeychainLoad(key: "walkie-server-url", outcome: urlOutcome)
+            logWalkieKeychainLoad(key: "walkie-access-code", outcome: codeOutcome)
+            var serverURL: String?
+            if case .value(let value) = urlOutcome { serverURL = value }
+            if serverURL == nil || serverURL?.isEmpty == true {
+                if let fallback = UserDefaults.standard.string(forKey: "walkie-server-url"), !fallback.isEmpty {
+                    walkieLogger.info("Keychain load: walkie-server-url falling back to UserDefaults")
+                    serverURL = fallback
+                }
+            }
+            var accessCode: String?
+            if case .value(let value) = codeOutcome { accessCode = value }
+            await WalkieTalkieLink.shared.configure(serverURL: serverURL, accessCode: accessCode)
+        }
+    }
+}
+
+private func logWalkieKeychainLoad(key: String, outcome: Keychain.LoadOutcome) {
+    switch outcome {
+    case .value:
+        walkieLogger.info("Keychain load: \(key, privacy: .public) present")
+    case .missing:
+        walkieLogger.info("Keychain load failed: \(key, privacy: .public) missing")
+    case .empty:
+        walkieLogger.info("Keychain load failed: \(key, privacy: .public) empty")
+    case .inaccessible(let status):
+        walkieLogger.error("Keychain load failed: \(key, privacy: .public) item exists but is inaccessible (status=\(status, privacy: .public)). Re-save the access code in Settings after an ad-hoc rebuild.")
     }
 }
 
