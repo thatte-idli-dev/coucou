@@ -226,32 +226,36 @@ jobs:
           SHORT_SHA=$(git rev-parse --short HEAD)
           TAG_NAME="walkie-test-${SHORT_SHA}"
           ZIP_NAME="Coucou.zip"
-          
+          ZIP_PATH="DerivedData/Build/Products/Release/${ZIP_NAME}"
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${ZIP_NAME}"
+
           cat > /tmp/release-notes.md <<EOF
           # Walkie-Talkie Test Build
-          
+
           **⚠️ Ad-hoc signed app - First Launch Instructions:**
           1. Download \`${ZIP_NAME}\`
           2. Extract the app
           3. Right-click on Coucou.app and select "Open"
           4. Click "Open" in the security dialog
-          
+
           Built from commit ${GITHUB_SHA} on branch ${GITHUB_REF_NAME}
-          
+
           This is an ad-hoc signed test build for walkie-talkie feature testing.
-          
+
           **Release URL:** https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG_NAME}
-          **Direct download:** https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${ZIP_NAME}
+          **Direct download:** ${DOWNLOAD_URL}
           EOF
-          
-          gh release delete "$TAG_NAME" --yes 2>/dev/null || true
-          git push origin ":refs/tags/$TAG_NAME" 2>/dev/null || true
-          
-          RELEASE_URL=$(gh release create "$TAG_NAME" \
-            "DerivedData/Build/Products/Release/${ZIP_NAME}" \
-            --title "Walkie Test ${SHORT_SHA}" \
-            --notes-file /tmp/release-notes.md \
-            --prerelease \
-            --json url -q .url)
-          
-          echo "::notice title=Release Created::${RELEASE_URL}"
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release ${TAG_NAME} already exists; uploading ${ZIP_NAME} with --clobber"
+            gh release upload "$TAG_NAME" "$ZIP_PATH" --clobber
+          elif ! gh release create "$TAG_NAME" \
+              "$ZIP_PATH" \
+              --title "Walkie Test ${SHORT_SHA}" \
+              --notes-file /tmp/release-notes.md \
+              --prerelease; then
+            echo "Create raced with another run; uploading ${ZIP_NAME} with --clobber"
+            gh release upload "$TAG_NAME" "$ZIP_PATH" --clobber
+          fi
+
+          echo "::notice title=Release asset::${DOWNLOAD_URL}"
