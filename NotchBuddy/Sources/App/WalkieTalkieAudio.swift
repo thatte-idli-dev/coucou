@@ -176,19 +176,22 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         guard let dict = message.body as? [String: Any],
               let type = dict["type"] as? String else { return }
         
-        Task {
-            await self.handleMessage(type: type, data: dict)
+        let candidate = dict["candidate"] as? String
+        let answer = dict["answer"] as? String
+        
+        Task { @MainActor in
+            self.handleMessage(type: type, candidate: candidate, answer: answer)
         }
     }
     
-    private func handleMessage(type: String, data: [String: Any]) {
+    private func handleMessage(type: String, candidate: String?, answer: String?) {
         switch type {
         case "ice":
-            if let candidate = data["candidate"] as? String {
+            if let candidate = candidate {
                 self.onIceCandidate?(candidate)
             }
         case "answer":
-            if let answer = data["answer"] as? String {
+            if let answer = answer {
                 self.onAnswer?(answer)
             }
         default:
