@@ -293,6 +293,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     
                     if let negID = stateEvent.negotiationID, negID != negotiationID {
                         negotiationID = negID
+                        let traceNeg = "[\(Date().timeIntervalSince1970)] calling startNegotiation: negotiationID=\(negID) isSeatA=\(isSeatA) currentState=\(state)\n"
+                        try? traceNeg.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
                         await fetchICEServers()
                         await startNegotiation()
                     }
@@ -445,6 +447,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
         
         // Double-check peer is still tuned before transitioning to .inCall
         // (conditions may have changed during async audio setup)
+        let traceCheck = "[\(Date().timeIntervalSince1970)] startNegotiation end: peerTuned=\(peerTuned) lastStateEventPeerTuned=\(lastStateEventPeerTuned) currentState=\(state)\n"
+        try? traceCheck.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
+        
         guard peerTuned else {
             // Mic is live, but stay in current state until peer joins
             let trace = "[\(Date().timeIntervalSince1970)] startNegotiation: NOT transitioning to inCall, peerTuned=false\n"
@@ -452,7 +457,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             return
         }
         
-        let trace = "[\(Date().timeIntervalSince1970)] startNegotiation: transitioning to inCall, peerTuned=\(peerTuned) lastStateEventPeerTuned=\(lastStateEventPeerTuned)\n"
+        let trace = "[\(Date().timeIntervalSince1970)] startNegotiation: transitioning to inCall, peerTuned=\(peerTuned)\n"
         try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
         
         state = .inCall(mode: .pushToTalk(transmitting: micEnabled))
