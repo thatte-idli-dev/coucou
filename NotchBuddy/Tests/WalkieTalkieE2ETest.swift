@@ -73,49 +73,49 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Both clients connected")
         
-        // Ensure both clients are stable before test sequence
-        try await Task.sleep(for: .milliseconds(500))
-        
         // Client A presses PTT
         await linkA.simulatePTTDown()
         
-        // Wait for A to enter .waiting or .inCall
+        // Wait for state transition (PTT handling is async)
         var attempts = 0
-        var aStartedInWaiting = false
         while true {
-            let stateA = linkA.currentState
-            if case .waiting = stateA {
-                aStartedInWaiting = true
-                break
-            }
-            if case .inCall = stateA {
-                // Both clients raced - valid when server sees both tuned quickly
-                print("⚠ Client A entered .inCall immediately (race condition)")
+            if case .waiting = linkA.currentState {
                 break
             }
             if attempts >= 20 {
-                throw TestError("Client A should be waiting or inCall (state: \(stateA))")
+                // Print debug traces to diagnose premature .inCall transition
+                let fm = FileManager.default
+                print("\n=== Diagnostic traces ===")
+                if let files = try? fm.contentsOfDirectory(atPath: "/tmp").filter({ $0.hasPrefix("walkie-trace-") }) {
+                    for file in files {
+                        if let content = try? String(contentsOfFile: "/tmp/\(file)") {
+                            print("Trace \(file):")
+                            print(content)
+                        }
+                    }
+                } else {
+                    print("No trace files found in /tmp")
+                }
+                print("=== End traces ===\n")
+                throw TestError("Client A should be waiting (state: \(linkA.currentState))")
             }
             try await Task.sleep(for: .milliseconds(100))
             attempts += 1
         }
         
-        if aStartedInWaiting {
-            print("✓ Client A is waiting")
-            
-            // Assert that A's mic is enabled while waiting
-            guard audioA.micEnabled else {
-                throw TestError("Client A's mic should be enabled while waiting")
-            }
-            print("✓ Client A's mic is live while waiting")
+        print("✓ Client A is waiting")
+        
+        // Assert that A's mic is enabled even while waiting (before peer joins)
+        guard audioA.micEnabled else {
+            throw TestError("Client A's mic should be enabled while waiting for peer")
         }
         
-        // Client B presses PTT (if not already in call)
-        if case .connected = linkB.currentState {
-            await linkB.simulatePTTDown()
-        }
+        print("✓ Client A's mic is live while waiting")
         
-        // Wait for both clients to be in call
+        // Client B presses PTT
+        await linkB.simulatePTTDown()
+        
+        // Wait for negotiation and both clients to be in call
         var callAttempts = 0
         while true {
             if case .inCall = linkA.currentState, case .inCall = linkB.currentState {
