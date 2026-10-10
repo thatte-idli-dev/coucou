@@ -69,7 +69,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         guard let wv = webView else { return }
         Task {
             do {
-                try await wv.callAsyncJavaScript("setMicEnabled(enabled)", arguments: ["enabled": enabled], contentWorld: .page)
+                _ = try await wv.callAsyncJavaScript("setMicEnabled(enabled)", arguments: ["enabled": enabled], contentWorld: .page)
             } catch {
                 logger.error("setMicEnabled failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -120,7 +120,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         guard let wv = webView else { return }
         Task {
             do {
-                try await wv.callAsyncJavaScript(
+                _ = try await wv.callAsyncJavaScript(
                     "handleAnswer(answerJSON)",
                     arguments: ["answerJSON": answer],
                     contentWorld: .page
@@ -135,7 +135,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         guard let wv = webView else { return }
         Task {
             do {
-                try await wv.callAsyncJavaScript(
+                _ = try await wv.callAsyncJavaScript(
                     "addIceCandidate(candidateJSON)",
                     arguments: ["candidateJSON": candidate],
                     contentWorld: .page
@@ -150,7 +150,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         guard let wv = webView else { return }
         Task {
             do {
-                try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
+                _ = try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
             } catch {
                 logger.error("cleanup failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -178,18 +178,18 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
     }
     
     nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard let dict = message.body as? [String: Any],
-              let type = dict["type"] as? String else { return }
-        
-        let candidate = dict["candidate"] as? String
-        let answer = dict["answer"] as? String
-        let errorMessage = dict["message"] as? String
-        let iceState = dict["state"] as? String
-        let candidateType = dict["candidateType"] as? String
-        let connectionState = dict["state"] as? String
-        
         Task { @MainActor in
-            self.handleMessage(type: type, candidate: candidate, answer: answer, errorMessage: errorMessage, iceState: iceState, candidateType: candidateType, connectionState: connectionState)
+            guard let dict = message.body as? [String: Any],
+                  let type = dict["type"] as? String else { return }
+            self.handleMessage(
+                type: type,
+                candidate: dict["candidate"] as? String,
+                answer: dict["answer"] as? String,
+                errorMessage: dict["message"] as? String,
+                iceState: dict["state"] as? String,
+                candidateType: dict["candidateType"] as? String,
+                connectionState: dict["state"] as? String
+            )
         }
     }
     

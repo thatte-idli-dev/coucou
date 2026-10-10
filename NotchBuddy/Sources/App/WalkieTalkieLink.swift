@@ -95,8 +95,8 @@ final class WalkieTalkieLink {
         handsFree = false
     }
     
-    private func applyTalkIntent() async {
-        await audioLayer.setMicEnabled(intendedMicEnabled)
+    private func applyTalkIntent() {
+        audioLayer.setMicEnabled(intendedMicEnabled)
     }
     
     var waitingTimeout: TimeInterval = 30  // Injectable for tests
@@ -119,10 +119,10 @@ final class WalkieTalkieLink {
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            let object = notification.object
+            let targetID = (notification.object as AnyObject?).map { ObjectIdentifier($0) }
             Task { @MainActor in
                 guard let self else { return }
-                guard object == nil || (object as? WalkieTalkieLink) === self else { return }
+                guard targetID == nil || targetID == ObjectIdentifier(self) else { return }
                 switch action {
                 case .pttDown: await self.handlePTTDown()
                 case .pttUp: await self.handlePTTUp()
@@ -297,7 +297,7 @@ final class WalkieTalkieLink {
         peerTuned = false
         hasPlayedGreet = false
         
-        await audioLayer.cleanup()
+        audioLayer.cleanup()
         
         if wasConnected {
             state = .disconnected
@@ -356,7 +356,7 @@ final class WalkieTalkieLink {
                     
                     // Play greet only on actual peer tune transition
                     if !wasPeerTuned {
-                        await playGreetOnce()
+                        playGreetOnce()
                     }
                 } else if myTuned && !peerTuned {
                     // Peer left
@@ -470,12 +470,12 @@ final class WalkieTalkieLink {
         let hasPermission = await audioLayer.checkMicPermission()
         logger.info("Mic permission check: \(hasPermission ? "granted" : "denied", privacy: .public)")
         guard hasPermission else {
-            await showMicPermissionAlert()
+            showMicPermissionAlert()
             return
         }
         
         // Mic and CallMode come from explicit hold / hands-free intent, not from .waiting
-        await audioLayer.setupWebView(
+        audioLayer.setupWebView(
             onIceCandidate: { [weak self] candidate in
                 Task { @MainActor in
                     await self?.sendIceCandidate(candidate)
@@ -488,7 +488,7 @@ final class WalkieTalkieLink {
             }
         )
         
-        await applyTalkIntent()
+        applyTalkIntent()
         
         if isSeatA {
             do {
@@ -517,7 +517,7 @@ final class WalkieTalkieLink {
         try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
         
         state = .inCall(mode: intendedCallMode)
-        await applyTalkIntent()
+        applyTalkIntent()
         await stopWaitingAnimation()
         NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
     }
@@ -569,7 +569,7 @@ final class WalkieTalkieLink {
                 logger.info("Answer sent")
                 
                 state = .inCall(mode: intendedCallMode)
-                await applyTalkIntent()
+                applyTalkIntent()
                 await stopWaitingAnimation()
                 NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
             } catch {
@@ -581,7 +581,7 @@ final class WalkieTalkieLink {
         
         if let answerJSON, isSeatA {
             logger.info("Received answer from peer, processing...")
-            await audioLayer.handleAnswer(answerJSON)
+            audioLayer.handleAnswer(answerJSON)
             logger.info("Answer processed")
         } else if answerJSON != nil, !isSeatA {
             logger.warning("Received answer but I am seat B (answerer), ignoring")
@@ -598,7 +598,7 @@ final class WalkieTalkieLink {
         }
         
         if let candidateJSON {
-            await audioLayer.addIceCandidate(candidateJSON)
+            audioLayer.addIceCandidate(candidateJSON)
         }
     }
     
@@ -662,7 +662,7 @@ final class WalkieTalkieLink {
     
     private func handlePTTDown() async {
         if channelFull {
-            await showChannelFullAlert()
+            showChannelFullAlert()
             return
         }
         
@@ -674,14 +674,14 @@ final class WalkieTalkieLink {
             let hasPermission = await audioLayer.checkMicPermission()
             logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied", privacy: .public)")
             guard hasPermission else {
-                await showMicPermissionAlert()
+                showMicPermissionAlert()
                 return
             }
             
             isHeld = true
             handsFree = false
             
-            await audioLayer.setupWebView(
+            audioLayer.setupWebView(
                 onIceCandidate: { [weak self] candidate in
                     Task { @MainActor in
                         await self?.sendIceCandidate(candidate)
@@ -693,7 +693,7 @@ final class WalkieTalkieLink {
                     }
                 }
             )
-            await applyTalkIntent()
+            applyTalkIntent()
             
             state = .waiting(started: Date())
             await sendPresence()
@@ -705,12 +705,12 @@ final class WalkieTalkieLink {
             if case .waiting(started: _) = state {
                 state = .waiting(started: Date())
             }
-            await applyTalkIntent()
+            applyTalkIntent()
             
         case .inCall(mode: .pushToTalk):
             isHeld = true
             state = .inCall(mode: intendedCallMode)
-            await applyTalkIntent()
+            applyTalkIntent()
             await sendPresence()
             
         case .inCall(mode: .handsFree):
@@ -726,12 +726,12 @@ final class WalkieTalkieLink {
         switch state {
         case .waiting:
             // Release PTT while waiting → mute unless hands-free
-            await applyTalkIntent()
+            applyTalkIntent()
             
         case .inCall:
             // Release PTT during call → stay in call; mic follows intent
             state = .inCall(mode: intendedCallMode)
-            await applyTalkIntent()
+            applyTalkIntent()
             await sendPresence()
             
         default:
@@ -741,7 +741,7 @@ final class WalkieTalkieLink {
     
     private func handleDoubleTap() async {
         if channelFull {
-            await showChannelFullAlert()
+            showChannelFullAlert()
             return
         }
         
@@ -753,14 +753,14 @@ final class WalkieTalkieLink {
             let hasPermission = await audioLayer.checkMicPermission()
             logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied", privacy: .public)")
             guard hasPermission else {
-                await showMicPermissionAlert()
+                showMicPermissionAlert()
                 return
             }
             
             handsFree = true
             isHeld = false
             
-            await audioLayer.setupWebView(
+            audioLayer.setupWebView(
                 onIceCandidate: { [weak self] candidate in
                     Task { @MainActor in
                         await self?.sendIceCandidate(candidate)
@@ -772,7 +772,7 @@ final class WalkieTalkieLink {
                     }
                 }
             )
-            await applyTalkIntent()
+            applyTalkIntent()
             
             state = .waiting(started: Date())
             await sendPresence()
@@ -782,12 +782,12 @@ final class WalkieTalkieLink {
         case .waiting:
             handsFree = true
             state = .waiting(started: Date())
-            await applyTalkIntent()
+            applyTalkIntent()
             
         case .inCall(mode: .pushToTalk):
             handsFree = true
             state = .inCall(mode: intendedCallMode)
-            await applyTalkIntent()
+            applyTalkIntent()
             await sendPresence()
             
         case .inCall(mode: .handsFree):
@@ -804,7 +804,7 @@ final class WalkieTalkieLink {
             // Cancel nudge (untune)
             resetTalkIntent()
             await stopWaitingAnimation()
-            await applyTalkIntent()
+            applyTalkIntent()
             state = .connected(tuned: false)
             await sendPresence()
             
@@ -833,12 +833,12 @@ final class WalkieTalkieLink {
             resetTalkIntent()
             await stopWaitingAnimation()
             state = .connected(tuned: false)
-            await applyTalkIntent()
+            applyTalkIntent()
             await sendPresence()
         }
     }
     
-    private func playGreetOnce() async {
+    private func playGreetOnce() {
         if !hasPlayedGreet {
             hasPlayedGreet = true
             SoundEngine.shared.play("greet")
@@ -846,7 +846,7 @@ final class WalkieTalkieLink {
     }
     
     private func startWaitingAnimation() async {
-        await playGreetOnce()
+        playGreetOnce()
         NotificationCenter.default.post(name: .botGreet, object: nil)
         
         let token = NSObject()
@@ -934,8 +934,8 @@ final class WalkieTalkieLink {
         iceRefreshTimer = nil
         
         resetTalkIntent()
-        await audioLayer.cleanup()
-        await applyTalkIntent()
+        audioLayer.cleanup()
+        applyTalkIntent()
         
         negotiationID = nil
         hasPlayedGreet = false
@@ -952,7 +952,7 @@ final class WalkieTalkieLink {
         streamHealthTimer?.cancel()
         
         await stopWaitingAnimation()
-        await audioLayer.cleanup()
+        audioLayer.cleanup()
         
         eventTask = nil
         presenceTask = nil
