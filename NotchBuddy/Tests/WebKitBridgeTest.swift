@@ -7,60 +7,48 @@ import WebKit
 /// 1. createOffer returns non-empty SDP
 /// 2. handleOffer returns non-empty answer
 /// 3. The same callAsyncJavaScript path production uses works correctly
+
 @MainActor
 @main
-struct WebKitBridgeTest {
-    static var didTimeout = false
-    
-    static func main() async {
-        print("🧪 WebKit Bridge Test")
-        print("=====================\n")
+class WebKitBridgeTest: NSObject, NSApplicationDelegate {
+    static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
         
-        // Hard timeout: 60 seconds
-        Task {
-            try? await Task.sleep(for: .seconds(60))
-            if !didTimeout {
-                didTimeout = true
-                print("\n❌ Test timed out after 60 seconds")
+        let delegate = WebKitBridgeTest()
+        app.delegate = delegate
+        
+        // 60s watchdog timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
+            print("\n❌ Test timed out after 60 seconds")
+            exit(1)
+        }
+        
+        app.run()
+    }
+    
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor in
+            do {
+                try await testOfferAnswerFlow()
+                print("\n✅ WebKit bridge test passed!")
+                exit(0)
+            } catch {
+                print("\n❌ WebKit bridge test failed: \(error)")
                 exit(1)
             }
         }
-        
-        do {
-            try await testOfferAnswerFlow()
-            didTimeout = true
-            print("\n✅ WebKit bridge test passed!")
-            exit(0)
-        } catch {
-            didTimeout = true
-            print("\n❌ WebKit bridge test failed: \(error)")
-            exit(1)
-        }
     }
     
-    static func testOfferAnswerFlow() async throws {
+    func testOfferAnswerFlow() async throws {
+        print("\n🧪 WebKit Bridge Test")
+        print("=====================\n")
         print("📝 Test: Offer/Answer SDP flow through JavaScript bridge")
         print("=========================================================\n")
         
         // Create two web views (simulating two peers)
-        let delegate = NavigationDelegate()
-        let webViewA = await createWebView(delegate: delegate)
-        let webViewB = await createWebView(delegate: delegate)
-        delegate.webViewA = webViewA
-        delegate.webViewB = webViewB
-        
-        // Wait for pages to load and delegate to confirm
-        print("⏳ Waiting for pages to load...")
-        var attempts = 0
-        while !delegate.aLoaded || !delegate.bLoaded {
-            if attempts > 40 {
-                throw TestError("Pages did not load after 20 seconds (aLoaded=\(delegate.aLoaded), bLoaded=\(delegate.bLoaded))")
-            }
-            // Run the runloop briefly to allow WebKit callbacks
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            try await Task.sleep(for: .milliseconds(400))
-            attempts += 1
-        }
+        let webViewA = await createWebView()
+        let webViewB = await createWebView()
         
         print("✓ Web views created and loaded\n")
         
@@ -75,13 +63,11 @@ struct WebKitBridgeTest {
         // Create offer on peer A
         let offer: String
         do {
-            let result = try await withRunLoop {
-                try await webViewA.callAsyncJavaScript(
-                    "return await createOffer(iceServers)",
-                    arguments: ["iceServers": iceServers],
-                    contentWorld: .page
-                )
-            }
+            let result = try await webViewA.callAsyncJavaScript(
+                "return await createOffer(iceServers)",
+                arguments: ["iceServers": iceServers],
+                contentWorld: .page
+            )
             
             guard let offerStr = result as? String, !offerStr.isEmpty else {
                 throw TestError("createOffer returned empty or invalid result: \(String(describing: result))")
@@ -112,13 +98,11 @@ struct WebKitBridgeTest {
         // Handle offer on peer B and get answer
         let answer: String
         do {
-            let result = try await withRunLoop {
-                try await webViewB.callAsyncJavaScript(
-                    "return await handleOffer(offerJSON, iceServers)",
-                    arguments: ["offerJSON": offer, "iceServers": iceServers],
-                    contentWorld: .page
-                )
-            }
+            let result = try await webViewB.callAsyncJavaScript(
+                "return await handleOffer(offerJSON, iceServers)",
+                arguments: ["offerJSON": offer, "iceServers": iceServers],
+                contentWorld: .page
+            )
             
             guard let answerStr = result as? String, !answerStr.isEmpty else {
                 throw TestError("handleOffer returned empty or invalid result: \(String(describing: result))")
@@ -148,13 +132,11 @@ struct WebKitBridgeTest {
         
         // Handle answer on peer A
         do {
-            _ = try await withRunLoop {
-                try await webViewA.callAsyncJavaScript(
-                    "return await handleAnswer(answerJSON)",
-                    arguments: ["answerJSON": answer],
-                    contentWorld: .page
-                )
-            }
+            _ = try await webViewA.callAsyncJavaScript(
+                "return await handleAnswer(answerJSON)",
+                arguments: ["answerJSON": answer],
+                contentWorld: .page
+            )
             
             print("✓ Peer A handled answer\n")
             
@@ -165,11 +147,12 @@ struct WebKitBridgeTest {
         print("✅ Full offer/answer flow completed successfully")
     }
     
-    static func createWebView(delegate: WKNavigationDelegate) async -> WKWebView {
+    func createWebView() async -> WKWebView {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
         
         let webView = WKWebView(frame: .zero, configuration: config)
+        let delegate = NavigationDelegate()
         webView.navigationDelegate = delegate
         
         // Use the same HTML as production WalkieTalkieAudio
@@ -191,7 +174,7 @@ struct WebKitBridgeTest {
         }
         
         async function createOffer(iceServers) {
-            // For testing, create a fake silent audio track if getUserMedia fails
+            // For testing, create a fake silent audio track (getUserMedia may fail on CI)
             try {
                 stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
                 audioTrack = stream.getAudioTracks()[0];
@@ -302,55 +285,38 @@ struct WebKitBridgeTest {
         // Use https://localhost/ for secure context (required for navigator.mediaDevices)
         webView.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
         
-        return webView
-    }
-}
-
-// Helper to pump the runloop while waiting for async operations
-// Required for WKWebView to function in a CLI context
-func withRunLoop<T>(_ operation: @escaping () async throws -> T) async rethrows -> T {
-    return try await withCheckedThrowingContinuation { continuation in
-        Task { @MainActor in
-            do {
-                let result = try await operation()
-                continuation.resume(returning: result)
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
+        // Wait for page to load
+        await delegate.waitForLoad()
         
-        // Pump the runloop while waiting
-        Task {
-            while !Task.isCancelled {
-                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
-                try? await Task.sleep(for: .milliseconds(50))
-            }
-        }
+        return webView
     }
 }
 
 @MainActor
 class NavigationDelegate: NSObject, WKNavigationDelegate {
-    var aLoaded = false
-    var bLoaded = false
-    weak var webViewA: WKWebView?
-    weak var webViewB: WKWebView?
+    private var continuation: CheckedContinuation<Void, Never>?
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("✓ Page loaded for webView \(webView === webViewA ? "A" : "B")")
-        if webView === webViewA {
-            aLoaded = true
-        } else if webView === webViewB {
-            bLoaded = true
-        }
+        continuation?.resume()
+        continuation = nil
     }
     
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         print("❌ Navigation failed: \(error)")
+        continuation?.resume()
+        continuation = nil
     }
     
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         print("❌ Provisional navigation failed: \(error)")
+        continuation?.resume()
+        continuation = nil
+    }
+    
+    func waitForLoad() async {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
     }
 }
 
