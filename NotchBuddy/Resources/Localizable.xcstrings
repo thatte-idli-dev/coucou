@@ -16769,6 +16769,16 @@
         }
       }
     },
+    "shortcut.walkie": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Walkie-talkie"
+          }
+        }
+      }
+    },
     "status.agy-hooks-installed": {
       "localizations": {
         "ar": {

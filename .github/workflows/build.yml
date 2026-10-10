@@ -66,6 +66,9 @@ jobs:
       - name: Wardrobe tests
         run: bash scripts/test-wardrobe.sh
 
+      - name: Walkie gesture tests
+        run: bash scripts/test-walkie-gesture.sh
+
       - name: Pill colour tests
         run: bash scripts/test-pill-colors.sh
 
