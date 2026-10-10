@@ -875,9 +875,9 @@ final class WalkieTalkieLink {
         waitingAnimationToken = token
         
         Task {
-            while waitingAnimationToken === token {
+            while self.waitingAnimationToken === token {
                 try? await Task.sleep(for: .seconds(2))
-                if waitingAnimationToken === token {
+                if self.waitingAnimationToken === token {
                     NotificationCenter.default.post(name: .botGreet, object: nil)
                 }
             }

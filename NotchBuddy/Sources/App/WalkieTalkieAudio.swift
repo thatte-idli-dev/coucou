@@ -106,10 +106,10 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
     func setMicEnabled(_ enabled: Bool) {
         Task {
             do {
-                _ = try await callPageJS("setMicEnabled(enabled);", arguments: ["enabled": enabled])
+                _ = try await self.callPageJS("setMicEnabled(enabled); return true;", arguments: ["enabled": enabled])
             } catch {
                 if case WalkieError.notInitialized = error { return }
-                logger.error("setMicEnabled failed: \(jsErrorDescription(error), privacy: .public)")
+                logger.error("setMicEnabled failed: \(self.jsErrorDescription(error), privacy: .public)")
             }
         }
     }
@@ -125,7 +125,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
             }
             return answer
         } catch {
-            logger.error("handleOffer failed: \(jsErrorDescription(error), privacy: .public)")
+            logger.error("handleOffer failed: \(self.jsErrorDescription(error), privacy: .public)")
             throw error
         }
     }
@@ -141,7 +141,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
             }
             return offer
         } catch {
-            logger.error("createOffer failed: \(jsErrorDescription(error), privacy: .public)")
+            logger.error("createOffer failed: \(self.jsErrorDescription(error), privacy: .public)")
             throw error
         }
     }
@@ -149,13 +149,13 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
     func handleAnswer(_ answer: String) {
         Task {
             do {
-                _ = try await callPageJS(
+                _ = try await self.callPageJS(
                     "handleAnswer(answerJSON)",
                     arguments: ["answerJSON": answer]
                 )
             } catch {
                 if case WalkieError.notInitialized = error { return }
-                logger.error("handleAnswer failed: \(jsErrorDescription(error), privacy: .public)")
+                logger.error("handleAnswer failed: \(self.jsErrorDescription(error), privacy: .public)")
             }
         }
     }
@@ -163,13 +163,13 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
     func addIceCandidate(_ candidate: String) {
         Task {
             do {
-                _ = try await callPageJS(
+                _ = try await self.callPageJS(
                     "addIceCandidate(candidateJSON)",
                     arguments: ["candidateJSON": candidate]
                 )
             } catch {
                 if case WalkieError.notInitialized = error { return }
-                logger.error("addIceCandidate failed: \(jsErrorDescription(error), privacy: .public)")
+                logger.error("addIceCandidate failed: \(self.jsErrorDescription(error), privacy: .public)")
             }
         }
     }
@@ -187,7 +187,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
                 do {
                     _ = try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
                 } catch {
-                    logger.error("cleanup failed: \(jsErrorDescription(error), privacy: .public)")
+                    logger.error("cleanup failed: \(self.jsErrorDescription(error), privacy: .public)")
                 }
             }
         }
@@ -210,10 +210,10 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKN
     private func waitUntilPageReady() async {
         if isPageReady || webView == nil { return }
         await withCheckedContinuation { continuation in
-            if isPageReady || webView == nil {
+            if self.isPageReady || self.webView == nil {
                 continuation.resume()
             } else {
-                pageReadyWaiters.append(continuation)
+                self.pageReadyWaiters.append(continuation)
             }
         }
     }
