@@ -37,7 +37,16 @@ func nextState(_ current: WalkieState, event: WalkieEvent) -> WalkieState {
         return .waiting(started: Date())
         
     case (.waiting, .pttUp):
+        return .connected(tuned: false)
+        
+    case (.connected(tuned: false), .tap):
         return current
+        
+    case (.waiting, .tap):
+        return .connected(tuned: false)
+        
+    case (.inCall(.handsFree), .tap):
+        return .connected(tuned: false)
         
     case (.waiting, .peerTuned):
         return .inCall(mode: .pushToTalk(transmitting: false))
@@ -77,6 +86,18 @@ let testDate = Date()
 var state: WalkieState = .connected(tuned: false)
 assert(state == .connected(tuned: false), "Initial state should be connected(tuned: false)")
 
+state = nextState(state, event: .tap)
+assert(state == .connected(tuned: false), "Idle single tap must not latch waiting")
+
+state = nextState(state, event: .pttDown)
+if case .waiting = state {} else {
+    print("❌ PTT down should transition to waiting")
+    exit(1)
+}
+
+state = nextState(state, event: .pttUp)
+assert(state == .connected(tuned: false), "Hold release while waiting must untune")
+
 state = nextState(state, event: .pttDown)
 if case .waiting = state {} else {
     print("❌ PTT down should transition to waiting")
@@ -97,6 +118,14 @@ assert(state == .inCall(mode: .handsFree), "Double tap should switch to hands-fr
 
 state = nextState(state, event: .tap)
 assert(state == .connected(tuned: false), "Tap should hang up")
+
+state = nextState(state, event: .doubleTap)
+if case .waiting = state {} else {
+    print("❌ Double tap from idle should start hands-free waiting")
+    exit(1)
+}
+state = nextState(state, event: .tap)
+assert(state == .connected(tuned: false), "Single tap must leave hands-free waiting")
 
 state = nextState(state, event: .doubleTap)
 if case .waiting = state {} else {

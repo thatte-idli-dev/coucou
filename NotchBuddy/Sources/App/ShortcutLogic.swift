@@ -257,6 +257,10 @@ final class WalkieGestureClassifier {
     private var lastReleaseTime: Int64? = nil
     private var isHeld: Bool = false
     private var firstTapPending: Bool = false
+    private(set) var lastDurationMS: Int64 = 0
+
+    var hasPendingTap: Bool { firstTapPending }
+    var isKeyDown: Bool { pressTime != nil }
 
     init(doubleTapInterval: TimeInterval = 0.5) {
         self.doubleTapIntervalSec = doubleTapInterval
@@ -273,6 +277,7 @@ final class WalkieGestureClassifier {
         pressTime = nil
 
         let durationMS = nowMS - down
+        lastDurationMS = durationMS
         if durationMS >= holdThresholdMS {
             isHeld = false
             return .pttUp
@@ -294,6 +299,7 @@ final class WalkieGestureClassifier {
         guard let down = pressTime, !isHeld else { return nil }
         if nowMS - down >= holdThresholdMS {
             isHeld = true
+            lastDurationMS = nowMS - down
             // Cancel any pending tap to prevent tap emission during hold
             firstTapPending = false
             lastReleaseTime = nil
@@ -305,10 +311,67 @@ final class WalkieGestureClassifier {
     func checkTapTimeout(at nowMS: Int64) -> Event? {
         guard firstTapPending, let lastUp = lastReleaseTime else { return nil }
         if TimeInterval(nowMS - lastUp) / 1000.0 >= doubleTapIntervalSec {
+            lastDurationMS = nowMS - lastUp
             firstTapPending = false
             lastReleaseTime = nil
             return .tap
         }
         return nil
+    }
+}
+
+// MARK: - Walkie combo + session mapping (pure)
+
+enum WalkieSessionPhase: Equatable {
+    case idle
+    case waiting(handsFree: Bool)
+    case inCall(handsFree: Bool, transmitting: Bool)
+}
+
+enum WalkieGestureMapping {
+    /// True while every required modifier is still down.
+    static func modifiersStillHeld(spec: ShortcutSpec, hidFlags: UInt) -> Bool {
+        if spec.nsFlags & ShortcutSpec.ctrlBit != 0 && hidFlags & ShortcutSpec.ctrlBit == 0 { return false }
+        if spec.nsFlags & ShortcutSpec.optBit != 0 && hidFlags & ShortcutSpec.optBit == 0 { return false }
+        if spec.nsFlags & ShortcutSpec.shiftBit != 0 && hidFlags & ShortcutSpec.shiftBit == 0 { return false }
+        if spec.nsFlags & ShortcutSpec.cmdBit != 0 && hidFlags & ShortcutSpec.cmdBit == 0 { return false }
+        return true
+    }
+
+    /// True while the walkie key AND every required modifier are still down.
+    /// Letting go of K, Control, Option, Shift or Command is a release.
+    static func comboStillHeld(spec: ShortcutSpec, hidFlags: UInt, keyIsDown: Bool) -> Bool {
+        keyIsDown && modifiersStillHeld(spec: spec, hidFlags: hidFlags)
+    }
+
+    static func apply(_ phase: WalkieSessionPhase, event: WalkieGestureClassifier.Event) -> WalkieSessionPhase {
+        switch (phase, event) {
+        case (.idle, .pttDown):
+            return .waiting(handsFree: false)
+        case (.idle, .doubleTap):
+            return .waiting(handsFree: true)
+        case (.idle, .tap), (.idle, .pttUp):
+            return .idle
+        case (.waiting(false), .pttUp):
+            return .idle
+        case (.waiting(true), .pttUp):
+            return .waiting(handsFree: true)
+        case (.waiting, .tap):
+            return .idle
+        case (.waiting, .doubleTap):
+            return .waiting(handsFree: true)
+        case (.waiting(let handsFree), .pttDown):
+            return .waiting(handsFree: handsFree)
+        case (.inCall(false, _), .pttDown):
+            return .inCall(handsFree: false, transmitting: true)
+        case (.inCall(false, _), .pttUp):
+            return .inCall(handsFree: false, transmitting: false)
+        case (.inCall(true, _), .pttDown), (.inCall(true, _), .pttUp):
+            return phase
+        case (.inCall, .tap):
+            return .idle
+        case (.inCall(_, _), .doubleTap):
+            return .inCall(handsFree: true, transmitting: true)
+        }
     }
 }

@@ -46,7 +46,7 @@ struct WalkieTalkieE2ETest {
         try await testTURNCredentials(serverURL: serverURL, accessCode: accessCode)
         
         // Test 6: Release PTT while waiting — mic must stay off after peer joins
-        try await testReleaseWhileWaitingKeepsMicOff(serverURL: serverURL, accessCode: accessCode)
+        try await testHoldReleaseUntunes(serverURL: serverURL, accessCode: accessCode)
         
         // Test 7: Double-tap while waiting — call starts hands-free
         try await testDoubleTapWhileWaitingStartsHandsFree(serverURL: serverURL, accessCode: accessCode)
@@ -474,12 +474,12 @@ struct WalkieTalkieE2ETest {
         print("✅ Test 5 passed")
     }
     
-    // MARK: - Test 6: Release while waiting keeps mic off
+    // MARK: - Test 6: Hold then release untunes
     
     @MainActor
-    static func testReleaseWhileWaitingKeepsMicOff(serverURL: String, accessCode: String) async throws {
-        print("\n🔇 Test 6: Release PTT while waiting — mic stays off after peer joins")
-        print("===================================================================")
+    static func testHoldReleaseUntunes(serverURL: String, accessCode: String) async throws {
+        print("\n🔇 Test 6: Hold then release untunes and stops the mic")
+        print("====================================================")
         
         let audioA = FakeAudioLayer()
         let audioB = FakeAudioLayer()
@@ -490,6 +490,12 @@ struct WalkieTalkieE2ETest {
         await linkB.configure(serverURL: serverURL, accessCode: accessCode)
         try await Task.sleep(for: .milliseconds(500))
         
+        await linkA.simulateTap()
+        try await Task.sleep(for: .milliseconds(50))
+        guard case .connected(tuned: false) = linkA.currentState else {
+            throw TestError("Idle single tap must not latch waiting, got \(linkA.currentState)")
+        }
+        
         await linkA.simulatePTTDown()
         try await waitUntilWaiting(linkA, label: "Client A")
         guard audioA.micEnabled else {
@@ -498,28 +504,14 @@ struct WalkieTalkieE2ETest {
         
         await linkA.simulatePTTUp()
         try await Task.sleep(for: .milliseconds(100))
-        guard case .waiting = linkA.currentState else {
-            throw TestError("Client A should still be waiting after release, got \(linkA.currentState)")
+        guard case .connected(tuned: false) = linkA.currentState else {
+            throw TestError("Hold release must untune waiting, got \(linkA.currentState)")
         }
         guard !audioA.micEnabled else {
-            throw TestError("Client A's mic should be off after releasing PTT while waiting")
+            throw TestError("Client A's mic should be off after releasing hold")
         }
         
-        print("✓ Client A released PTT while waiting; mic off")
-        
-        await linkB.simulatePTTDown()
-        try await waitUntilBothInCall(linkA, linkB)
-        
-        guard case .inCall(mode: .pushToTalk(transmitting: false)) = linkA.currentState else {
-            throw TestError("Client A should be inCall PTT muted after peer joins, got \(linkA.currentState)")
-        }
-        guard !audioA.micEnabled else {
-            throw TestError("Client A's mic should stay off after peer joins (nothing held)")
-        }
-        
-        try assertMicMatchesCallMode(state: linkB.currentState, micEnabled: audioB.micEnabled, label: "Client B")
-        
-        print("✓ Client A in call with mic off; Client B mic matches CallMode")
+        print("✓ Hold release untuned; idle tap did not latch")
         
         await linkA.disconnect()
         await linkB.disconnect()
@@ -569,6 +561,12 @@ struct WalkieTalkieE2ETest {
         try assertMicMatchesCallMode(state: linkB.currentState, micEnabled: audioB.micEnabled, label: "Client B")
         
         print("✓ Client A in call hands-free with mic on; Client B mic matches CallMode")
+        
+        await linkA.simulateTap()
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .connected(tuned: false) = linkA.currentState else {
+            throw TestError("Single tap must leave hands-free, got \(linkA.currentState)")
+        }
         
         await linkA.disconnect()
         await linkB.disconnect()

@@ -141,10 +141,18 @@ final class WalkieTalkieLink {
                 guard let self else { return }
                 guard targetID == nil || targetID == ObjectIdentifier(self) else { return }
                 switch action {
-                case .pttDown: await self.handlePTTDown()
-                case .pttUp: await self.handlePTTUp()
-                case .doubleTap: await self.handleDoubleTap()
-                case .tap: await self.handleTap()
+                case .pttDown:
+                    logger.info("Walkie gesture: holdStart")
+                    await self.handlePTTDown()
+                case .pttUp:
+                    logger.info("Walkie gesture: holdEnd")
+                    await self.handlePTTUp()
+                case .doubleTap:
+                    logger.info("Walkie gesture: doubleTap")
+                    await self.handleDoubleTap()
+                case .tap:
+                    logger.info("Walkie gesture: singleTap")
+                    await self.handleTap()
                 }
             }
         }
@@ -862,14 +870,23 @@ final class WalkieTalkieLink {
         isHeld = false
         switch state {
         case .waiting:
-            // Release PTT while waiting → mute unless hands-free
-            applyTalkIntent()
+            if self.handsFree {
+                self.applyTalkIntent()
+                return
+            }
+            logger.info("Hold ended: untune waiting")
+            self.resetTalkIntent()
+            await self.stopWaitingAnimation()
+            self.waitingTimer?.cancel()
+            self.waitingTimer = nil
+            self.applyTalkIntent()
+            self.state = .connected(tuned: false)
+            await self.sendPresence()
             
         case .inCall:
-            // Release PTT during call → stay in call; mic follows intent
-            state = .inCall(mode: intendedCallMode)
-            applyTalkIntent()
-            await sendPresence()
+            self.state = .inCall(mode: self.intendedCallMode)
+            self.applyTalkIntent()
+            await self.sendPresence()
             
         default:
             break

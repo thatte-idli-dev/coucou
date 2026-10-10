@@ -1,6 +1,9 @@
 import AppKit
 import Combine
 import SwiftUI
+import os.log
+
+private let walkieGestureLogger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 @MainActor
 final class IslandWindowController: NSWindowController {
@@ -557,11 +560,12 @@ final class IslandWindowController: NSWindowController {
         let nowMS = Int64(Date().timeIntervalSince1970 * 1000)
         
         if isPressed {
-            if let event = walkieClassifier.keyDown(at: nowMS) {
-                postWalkieEvent(event)
+            walkieGestureLogger.info("Hotkey raw: walkie down")
+            if let event = self.walkieClassifier.keyDown(at: nowMS) {
+                self.postWalkieEvent(event)
             }
-            walkieCheckTimer?.invalidate()
-            walkieCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            self.walkieCheckTimer?.invalidate()
+            self.walkieCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 let now = Int64(Date().timeIntervalSince1970 * 1000)
                 if let e = self.walkieClassifier.checkHoldThreshold(at: now) {
@@ -574,20 +578,35 @@ final class IslandWindowController: NSWindowController {
                 }
             }
         } else {
-            if let event = walkieClassifier.keyUp(at: nowMS) {
-                postWalkieEvent(event)
+            walkieGestureLogger.info("Hotkey raw: walkie up")
+            if let event = self.walkieClassifier.keyUp(at: nowMS) {
+                self.postWalkieEvent(event)
+            }
+            if !self.walkieClassifier.hasPendingTap {
+                self.walkieCheckTimer?.invalidate()
+                self.walkieCheckTimer = nil
             }
         }
     }
 
     private func postWalkieEvent(_ event: WalkieGestureClassifier.Event) {
+        let label: String
         let name: Notification.Name
         switch event {
-        case .pttDown:   name = .walkiePTTDown
-        case .pttUp:     name = .walkiePTTUp
-        case .doubleTap: name = .walkieDoubleTap
-        case .tap:       name = .walkieTap
+        case .pttDown:
+            label = "holdStart"
+            name = .walkiePTTDown
+        case .pttUp:
+            label = "holdEnd"
+            name = .walkiePTTUp
+        case .doubleTap:
+            label = "doubleTap"
+            name = .walkieDoubleTap
+        case .tap:
+            label = "singleTap"
+            name = .walkieTap
         }
+        walkieGestureLogger.info("Walkie gesture: \(label, privacy: .public) durationMs=\(self.walkieClassifier.lastDurationMS, privacy: .public)")
         NotificationCenter.default.post(name: name, object: nil)
     }
 
