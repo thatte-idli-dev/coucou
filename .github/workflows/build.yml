@@ -157,6 +157,7 @@ jobs:
             -scheme NotchBuddy \
             -configuration Release \
             -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
             build
 
       - name: Ad-hoc codesign with mic entitlement
