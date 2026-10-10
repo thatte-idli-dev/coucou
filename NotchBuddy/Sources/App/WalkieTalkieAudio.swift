@@ -59,20 +59,47 @@ final class WalkieTalkieSchemeHandler: NSObject, WKURLSchemeHandler {
 
 /// Dedicated nonisolated NSObject so Swift 6 `@MainActor` isolation cannot
 /// drop the ObjC selector WebKit uses for media capture.
+///
+/// Xcode 26.6+ (macOS 26 SDK) and Xcode 27 expose that selector as the async
+/// `webView(_:decideMediaCapturePermissionsFor:initiatedBy:type:)`. The old
+/// decisionHandler Swift name maps to the same ObjC selector and will not
+/// compile (`conflicts with optional requirement`). `compiler(>=6.2)` is the
+/// guard that is true on both CI (Xcode 26.6 / Swift 6.2) and Xcode 27;
+/// `compiler(>=6.3)` would leave CI on the old method and fail the same way.
 final class WalkieTalkieWebViewUIDelegate: NSObject, WKUIDelegate {
-    @objc(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:)
+#if compiler(>=6.2)
     func webView(
+        _ webView: WKWebView,
+        decideMediaCapturePermissionsFor origin: WKSecurityOrigin,
+        initiatedBy frame: WKFrameInfo,
+        type: WKMediaCaptureType
+    ) async -> WKPermissionDecision {
+        Self.logCaptureDecision(origin: origin, type: type, api: "async")
+        return .grant
+    }
+#else
+    @objc(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:)
+    func grantMediaCapture(
         _ webView: WKWebView,
         requestMediaCapturePermissionFor origin: WKSecurityOrigin,
         initiatedByFrame frame: WKFrameInfo,
         type: WKMediaCaptureType,
         decisionHandler: @escaping (WKPermissionDecision) -> Void
     ) {
+        Self.logCaptureDecision(origin: origin, type: type, api: "callback")
+        decisionHandler(.grant)
+    }
+#endif
+
+    private static func logCaptureDecision(
+        origin: WKSecurityOrigin,
+        type: WKMediaCaptureType,
+        api: String
+    ) {
         let host = origin.host
         let scheme = origin.protocol
         let kind = String(describing: type)
-        logger.info("Media capture permission: entered type=\(kind, privacy: .public) origin=\(host, privacy: .public) scheme=\(scheme, privacy: .public)")
-        decisionHandler(.grant)
+        logger.info("Media capture permission: entered type=\(kind, privacy: .public) origin=\(host, privacy: .public) scheme=\(scheme, privacy: .public) api=\(api, privacy: .public)")
         logger.info("Media capture permission: grant type=\(kind, privacy: .public) origin=\(host, privacy: .public)")
     }
 }
@@ -168,7 +195,12 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKNavigationDeleg
         isPageReady = false
 
         let responds = uiDelegate.responds(to: WalkieTalkieScheme.mediaCaptureSelector)
-        logger.info("WK uiDelegate set before load respondsToMediaCapture=\(responds, privacy: .public) uiDelegateNil=\(wv.uiDelegate == nil, privacy: .public)")
+#if compiler(>=6.2)
+        let captureAPI = "async"
+#else
+        let captureAPI = "callback"
+#endif
+        logger.info("WK uiDelegate set before load respondsToMediaCapture=\(responds, privacy: .public) uiDelegateNil=\(wv.uiDelegate == nil, privacy: .public) api=\(captureAPI, privacy: .public)")
         if !responds {
             logger.error("WK uiDelegate does not respond to webView:requestMediaCapturePermissionForOrigin:... — getUserMedia will hang")
         }
@@ -383,15 +415,15 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKNavigationDeleg
     }
 
     nonisolated func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        let url = webView.url?.absoluteString ?? "nil"
         Task { @MainActor in
+            let url = webView.url?.absoluteString ?? "nil"
             logger.info("Walkie page didCommit url=\(url, privacy: .public)")
         }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        let url = webView.url?.absoluteString ?? "nil"
         Task { @MainActor in
+            let url = webView.url?.absoluteString ?? "nil"
             logger.info("Walkie page didFinish url=\(url, privacy: .public)")
             self.logWindowState(context: "didFinish")
             self.markPageReady()
