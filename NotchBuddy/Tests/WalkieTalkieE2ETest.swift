@@ -71,6 +71,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 1: Full Call Flow
     
+    @MainActor
     static func testFullCallFlow(serverURL: String, accessCode: String) async throws {
         print("\n📞 Test 1: Full call flow with bidirectional signaling")
         print("=====================================================")
@@ -160,6 +161,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 2: Tap to Hang Up
     
+    @MainActor
     static func testTapToHangup(serverURL: String, accessCode: String) async throws {
         print("\n👆 Test 2: Tap to hang up")
         print("=========================")
@@ -221,6 +223,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 3: Tap to Cancel Waiting
     
+    @MainActor
     static func testTapToCancelWaiting(serverURL: String, accessCode: String) async throws {
         print("\n🚫 Test 3: Tap to cancel waiting")
         print("=================================")
@@ -260,6 +263,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 4: Waiting Timeout
     
+    @MainActor
     static func testWaitingTimeout(serverURL: String, accessCode: String) async throws {
         print("\n⏱️  Test 4: Waiting timeout (30s)")
         print("=================================")
@@ -308,6 +312,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 5: TURN Credentials
     
+    @MainActor
     static func testTURNCredentials(serverURL: String, accessCode: String) async throws {
         print("\n🔐 Test 5: TURN credentials verification")
         print("==========================================")
