@@ -2,7 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'cursor/walkie-talkie-voice-client-*'
   pull_request:
     branches: 
       - main
@@ -12,6 +14,9 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
 
@@ -214,7 +219,7 @@ jobs:
           path: DerivedData/Build/Products/Release/Coucou.zip
 
       - name: Create prerelease
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/cursor/walkie-talkie-voice-client-')
+        if: startsWith(github.head_ref || github.ref_name, 'cursor/walkie-talkie-voice-client-')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
