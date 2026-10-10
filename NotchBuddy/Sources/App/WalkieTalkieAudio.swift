@@ -10,6 +10,129 @@ private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "W
 final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKScriptMessageHandler {
     static let shared = WalkieTalkieAudioImpl()
     
+    static let pageHTML = """
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="utf-8"></head>
+        <body>
+        <audio id="remoteAudio" autoplay></audio>
+        <script>
+        let pc = null;
+        let stream = null;
+        let audioTrack = null;
+        let wantMic = false;
+        const remoteAudio = document.getElementById('remoteAudio');
+        
+        if (!navigator.mediaDevices) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'error',
+                message: 'navigator.mediaDevices is undefined (secure context required)'
+            });
+        }
+        
+        async function createOffer(iceServers) {
+            if (!stream) {
+                stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+                audioTrack = stream.getAudioTracks()[0];
+                audioTrack.enabled = wantMic;
+            }
+            
+            pc = new RTCPeerConnection({iceServers: iceServers});
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            
+            pc.ontrack = (e) => {
+                if (e.streams && e.streams[0]) {
+                    remoteAudio.srcObject = e.streams[0];
+                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
+                }
+            };
+            
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    window.webkit.messageHandlers.native.postMessage({
+                        type: 'ice',
+                        candidate: JSON.stringify(e.candidate.toJSON())
+                    });
+                }
+            };
+            
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            return JSON.stringify(offer);
+        }
+        
+        async function handleOffer(offerJSON, iceServers) {
+            if (!stream) {
+                stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+                audioTrack = stream.getAudioTracks()[0];
+                audioTrack.enabled = wantMic;
+            }
+            
+            pc = new RTCPeerConnection({iceServers: iceServers});
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            
+            pc.ontrack = (e) => {
+                if (e.streams && e.streams[0]) {
+                    remoteAudio.srcObject = e.streams[0];
+                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
+                }
+            };
+            
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    window.webkit.messageHandlers.native.postMessage({
+                        type: 'ice',
+                        candidate: JSON.stringify(e.candidate.toJSON())
+                    });
+                }
+            };
+            
+            const offer = JSON.parse(offerJSON);
+            await pc.setRemoteDescription(offer);
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            return JSON.stringify(answer);
+        }
+        
+        async function handleAnswer(answerJSON) {
+            if (!pc) return;
+            const answer = JSON.parse(answerJSON);
+            await pc.setRemoteDescription(answer);
+        }
+        
+        async function addIceCandidate(candidateJSON) {
+            if (!pc) return;
+            const candidate = JSON.parse(candidateJSON);
+            await pc.addIceCandidate(candidate);
+        }
+        
+        function setMicEnabled(enabled) {
+            wantMic = enabled;
+            if (audioTrack) {
+                audioTrack.enabled = enabled;
+            }
+        }
+        
+        function cleanup() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                audioTrack = null;
+            }
+            if (remoteAudio.srcObject) {
+                remoteAudio.srcObject.getTracks().forEach(track => track.stop());
+                remoteAudio.srcObject = null;
+            }
+        }
+        </script>
+        </body>
+        </html>
+        """
+    
     private var window: NSWindow?
     private var webView: WKWebView?
     private var onIceCandidate: ((String) -> Void)?
@@ -205,128 +328,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
     }
     
     private var htmlContent: String {
-        """
-        <!DOCTYPE html>
-        <html>
-        <head><meta charset="utf-8"></head>
-        <body>
-        <audio id="remoteAudio" autoplay></audio>
-        <script>
-        let pc = null;
-        let stream = null;
-        let audioTrack = null;
-        let wantMic = false;
-        const remoteAudio = document.getElementById('remoteAudio');
-        
-        if (!navigator.mediaDevices) {
-            window.webkit.messageHandlers.native.postMessage({
-                type: 'error',
-                message: 'navigator.mediaDevices is undefined (secure context required)'
-            });
-        }
-        
-        async function createOffer(iceServers) {
-            if (!stream) {
-                stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
-                audioTrack = stream.getAudioTracks()[0];
-                audioTrack.enabled = wantMic;
-            }
-            
-            pc = new RTCPeerConnection({iceServers: iceServers});
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
-            
-            pc.ontrack = (e) => {
-                if (e.streams && e.streams[0]) {
-                    remoteAudio.srcObject = e.streams[0];
-                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
-                }
-            };
-            
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    window.webkit.messageHandlers.native.postMessage({
-                        type: 'ice',
-                        candidate: JSON.stringify(e.candidate.toJSON())
-                    });
-                }
-            };
-            
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            return JSON.stringify(offer);
-        }
-        
-        async function handleOffer(offerJSON, iceServers) {
-            if (!stream) {
-                stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
-                audioTrack = stream.getAudioTracks()[0];
-                audioTrack.enabled = wantMic;
-            }
-            
-            pc = new RTCPeerConnection({iceServers: iceServers});
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
-            
-            pc.ontrack = (e) => {
-                if (e.streams && e.streams[0]) {
-                    remoteAudio.srcObject = e.streams[0];
-                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
-                }
-            };
-            
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    window.webkit.messageHandlers.native.postMessage({
-                        type: 'ice',
-                        candidate: JSON.stringify(e.candidate.toJSON())
-                    });
-                }
-            };
-            
-            const offer = JSON.parse(offerJSON);
-            await pc.setRemoteDescription(offer);
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            return JSON.stringify(answer);
-        }
-        
-        async function handleAnswer(answerJSON) {
-            if (!pc) return;
-            const answer = JSON.parse(answerJSON);
-            await pc.setRemoteDescription(answer);
-        }
-        
-        async function addIceCandidate(candidateJSON) {
-            if (!pc) return;
-            const candidate = JSON.parse(candidateJSON);
-            await pc.addIceCandidate(candidate);
-        }
-        
-        function setMicEnabled(enabled) {
-            wantMic = enabled;
-            if (audioTrack) {
-                audioTrack.enabled = enabled;
-            }
-        }
-        
-        function cleanup() {
-            if (pc) {
-                pc.close();
-                pc = null;
-            }
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-                stream = null;
-                audioTrack = null;
-            }
-            if (remoteAudio.srcObject) {
-                remoteAudio.srcObject.getTracks().forEach(track => track.stop());
-                remoteAudio.srcObject = null;
-            }
-        }
-        </script>
-        </body>
-        </html>
-        """
+        WalkieTalkieAudioImpl.pageHTML
     }
 }
 

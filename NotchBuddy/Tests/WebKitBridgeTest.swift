@@ -3,7 +3,7 @@ import AppKit
 import WebKit
 
 /// Test the real WebKit JavaScript bridge for WebRTC
-/// This test loads the actual HTML from WalkieTalkieAudio and verifies:
+/// This test loads the actual production HTML from WalkieTalkieAudioImpl and verifies:
 /// 1. createOffer returns non-empty SDP
 /// 2. handleOffer returns non-empty answer
 /// 3. The same callAsyncJavaScript path production uses works correctly
@@ -38,25 +38,42 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         print("📝 Test: Offer/Answer SDP flow through JavaScript bridge")
         print("=========================================================\n")
         
-        // Create web views
+        // Create user script to override getUserMedia with fake audio track
+        let userScript = WKUserScript(
+            source: """
+            // Override getUserMedia to provide fake audio track (for CI)
+            navigator.mediaDevices.getUserMedia = async function(constraints) {
+                console.log('[Override] getUserMedia called with', constraints);
+                const audioContext = new AudioContext();
+                const oscillator = audioContext.createOscillator();
+                const dest = audioContext.createMediaStreamDestination();
+                oscillator.connect(dest);
+                console.log('[Override] Returning fake audio stream');
+                return dest.stream;
+            };
+            console.log('[Override] getUserMedia override installed');
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        )
+        
+        // Create web views with the override
         let configA = WKWebViewConfiguration()
         configA.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        let consoleHandlerA = ConsoleMessageHandler(name: "A")
-        configA.userContentController.add(consoleHandlerA, name: "consoleLog")
+        configA.userContentController.addUserScript(userScript)
         webViewA = WKWebView(frame: .zero, configuration: configA)
         delegateA = NavigationDelegate()
         webViewA.navigationDelegate = delegateA
         
         let configB = WKWebViewConfiguration()
         configB.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        let consoleHandlerB = ConsoleMessageHandler(name: "B")
-        configB.userContentController.add(consoleHandlerB, name: "consoleLog")
+        configB.userContentController.addUserScript(userScript)
         webViewB = WKWebView(frame: .zero, configuration: configB)
         delegateB = NavigationDelegate()
         webViewB.navigationDelegate = delegateB
         
-        // Load HTML
-        let html = makeHTML()
+        // Load PRODUCTION HTML from WalkieTalkieAudioImpl
+        let html = WalkieTalkieAudioImpl.pageHTML
         webViewA.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
         webViewB.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
         
@@ -193,183 +210,6 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
     func fail(_ message: String) {
         print("\n❌ WebKit bridge test failed: \(message)")
         exit(1)
-    }
-    
-    func makeHTML() -> String {
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head><meta charset="utf-8"></head>
-        <body>
-        <audio id="remoteAudio" autoplay></audio>
-        <script>
-        // Override console.log to send to Swift
-        const originalLog = console.log;
-        const originalError = console.error;
-        const originalWarn = console.warn;
-        console.log = (...args) => {
-            originalLog(...args);
-            window.webkit.messageHandlers.consoleLog.postMessage(args.join(' '));
-        };
-        console.error = (...args) => {
-            originalError(...args);
-            window.webkit.messageHandlers.consoleLog.postMessage('ERROR: ' + args.join(' '));
-        };
-        console.warn = (...args) => {
-            originalWarn(...args);
-            window.webkit.messageHandlers.consoleLog.postMessage('WARN: ' + args.join(' '));
-        };
-        
-        let pc = null;
-        let stream = null;
-        let audioTrack = null;
-        let wantMic = false;
-        const remoteAudio = document.getElementById('remoteAudio');
-        
-        console.log('JavaScript loaded');
-        
-        if (!navigator.mediaDevices) {
-            console.error('navigator.mediaDevices is undefined (secure context required)');
-        } else {
-            console.log('navigator.mediaDevices is available');
-        }
-        
-        async function createOffer(iceServers) {
-            // Create silent audio context track (avoid getUserMedia on CI)
-            console.log('createOffer: Creating fake audio track');
-            const audioContext = new AudioContext();
-            const oscillator = audioContext.createOscillator();
-            const dest = audioContext.createMediaStreamDestination();
-            oscillator.connect(dest);
-            stream = dest.stream;
-            audioTrack = stream.getAudioTracks()[0];
-            audioTrack.enabled = wantMic;
-            console.log('createOffer: Audio track created');
-            
-            console.log('createOffer: Creating RTCPeerConnection');
-            pc = new RTCPeerConnection({iceServers: iceServers});
-            console.log('createOffer: Adding tracks');
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
-            
-            pc.ontrack = (e) => {
-                console.log('createOffer: ontrack fired');
-                if (e.streams && e.streams[0]) {
-                    remoteAudio.srcObject = e.streams[0];
-                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
-                }
-            };
-            
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    console.log('ICE candidate:', e.candidate);
-                }
-            };
-            
-            console.log('createOffer: Creating offer...');
-            const offer = await pc.createOffer();
-            console.log('createOffer: Setting local description...');
-            await pc.setLocalDescription(offer);
-            console.log('createOffer: Done, returning SDP');
-            return JSON.stringify(offer);
-        }
-        
-        async function handleOffer(offerJSON, iceServers) {
-            // Create silent audio context track (avoid getUserMedia on CI)
-            console.log('handleOffer: Creating fake audio track');
-            const audioContext = new AudioContext();
-            const oscillator = audioContext.createOscillator();
-            const dest = audioContext.createMediaStreamDestination();
-            oscillator.connect(dest);
-            stream = dest.stream;
-            audioTrack = stream.getAudioTracks()[0];
-            audioTrack.enabled = wantMic;
-            console.log('handleOffer: Audio track created');
-            
-            console.log('handleOffer: Creating RTCPeerConnection');
-            pc = new RTCPeerConnection({iceServers: iceServers});
-            console.log('handleOffer: Adding tracks');
-            stream.getTracks().forEach(track => pc.addTrack(track, stream));
-            
-            pc.ontrack = (e) => {
-                console.log('handleOffer: ontrack fired');
-                if (e.streams && e.streams[0]) {
-                    remoteAudio.srcObject = e.streams[0];
-                    remoteAudio.play().catch(err => console.error('Audio play failed:', err));
-                }
-            };
-            
-            pc.onicecandidate = (e) => {
-                if (e.candidate) {
-                    console.log('ICE candidate:', e.candidate);
-                }
-            };
-            
-            console.log('handleOffer: Parsing offer JSON');
-            const offer = JSON.parse(offerJSON);
-            console.log('handleOffer: Setting remote description...');
-            await pc.setRemoteDescription(offer);
-            console.log('handleOffer: Creating answer...');
-            const answer = await pc.createAnswer();
-            console.log('handleOffer: Setting local description...');
-            await pc.setLocalDescription(answer);
-            console.log('handleOffer: Done, returning answer');
-            return JSON.stringify(answer);
-        }
-        
-        async function handleAnswer(answerJSON) {
-            console.log('handleAnswer: Starting');
-            if (!pc) {
-                console.error('handleAnswer: No peer connection!');
-                return;
-            }
-            console.log('handleAnswer: Parsing answer JSON');
-            const answer = JSON.parse(answerJSON);
-            console.log('handleAnswer: Setting remote description...');
-            await pc.setRemoteDescription(answer);
-            console.log('handleAnswer: Done');
-        }
-        
-        function setMicEnabled(enabled) {
-            wantMic = enabled;
-            if (audioTrack) {
-                audioTrack.enabled = enabled;
-            }
-        }
-        
-        function cleanup() {
-            if (pc) {
-                pc.close();
-                pc = null;
-            }
-            if (stream) {
-                stream.getTracks().forEach(track => track.stop());
-                stream = null;
-                audioTrack = null;
-            }
-            if (remoteAudio.srcObject) {
-                remoteAudio.srcObject.getTracks().forEach(track => track.stop());
-                remoteAudio.srcObject = null;
-            }
-        }
-        </script>
-        </body>
-        </html>
-        """
-    }
-}
-
-@MainActor
-class ConsoleMessageHandler: NSObject, WKScriptMessageHandler {
-    let name: String
-    
-    init(name: String) {
-        self.name = name
-    }
-    
-    nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        Task { @MainActor in
-            print("[WebView \(self.name)] \(message.body)")
-        }
     }
 }
 
