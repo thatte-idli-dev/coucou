@@ -379,7 +379,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
-        logger.info("Presence: rev=\(revision, privacy: .public) tuned=\(tuned, privacy: .public) transmitting=\(transmitting, privacy: .public)")
+        logger.info("Presence: rev=\(self.revision, privacy: .public) tuned=\(tuned, privacy: .public) transmitting=\(transmitting, privacy: .public)")
         
         do {
             let (_, response) = try await URLSession.shared.data(for: req)
