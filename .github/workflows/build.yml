@@ -99,6 +99,9 @@ jobs:
         timeout-minutes: 3
         run: bash scripts/test-webkit-bridge.sh
 
+      - name: Walkie mic harness typecheck
+        run: bash scripts/test-walkie-mic-harness.sh
+
       - name: Install Go
         uses: actions/setup-go@v5
         with:

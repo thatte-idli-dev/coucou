@@ -95,6 +95,8 @@ final class WalkieTalkieLink {
     private var hasPlayedGreet: Bool = false
     private var isHeld: Bool = false
     private var handsFree: Bool = false
+    private var negotiationMediaReady: Bool = false
+    private var peerUntunedGraceTask: Task<Void, Never>?
     
     private var audioLayer: WalkieAudioLayer
     
@@ -407,6 +409,7 @@ final class WalkieTalkieLink {
         sessionToken = nil
         revision = 0
         negotiationID = nil
+        negotiationMediaReady = false
         peerTuned = false
         hasPlayedGreet = false
         bothTunedWatchdog?.cancel()
@@ -469,6 +472,8 @@ final class WalkieTalkieLink {
                 try? trace.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
                 
                 if myTuned && peerTuned {
+                    self.peerUntunedGraceTask?.cancel()
+                    self.peerUntunedGraceTask = nil
                     logger.info("Both tuned: local=true peer=true offerer=\(offererLabel, privacy: .public) negotiation=\(stateEvent.negotiationID ?? "none", privacy: .public)")
                     if stateEvent.negotiationID == nil {
                         self.startBothTunedWatchdog()
@@ -484,6 +489,9 @@ final class WalkieTalkieLink {
                     
                     if let negID = stateEvent.negotiationID, negID != negotiationID {
                         negotiationID = negID
+                        negotiationMediaReady = false
+                        peerUntunedGraceTask?.cancel()
+                        peerUntunedGraceTask = nil
                         let traceNeg = "[\(Date().timeIntervalSince1970)] calling startNegotiation: negotiationID=\(negID) isSeatA=\(isSeatA) currentState=\(state)\n"
                         try? traceNeg.appendToFile(at: "/tmp/walkie-trace-\(sessionID ?? "unknown").log")
                         await fetchICEServers()
@@ -497,9 +505,14 @@ final class WalkieTalkieLink {
                 } else if myTuned && !peerTuned {
                     self.bothTunedWatchdog?.cancel()
                     self.bothTunedWatchdog = nil
-                    // Peer left
                     if case .inCall = state {
-                        await endCall()
+                        if self.negotiationMediaReady {
+                            await endCall(reason: "peer untuned while inCall")
+                        } else {
+                            let seat = self.isSeatA ? "A" : "B"
+                            logger.error("Peer untuned while inCall but offer/answer not ready; staying inCall seat=\(seat, privacy: .public) — not tearing down")
+                            self.startPeerUntunedGrace()
+                        }
                     }
                 } else if !myTuned && peerTuned {
                     self.bothTunedWatchdog?.cancel()
@@ -511,7 +524,14 @@ final class WalkieTalkieLink {
                 } else {
                     self.bothTunedWatchdog?.cancel()
                     self.bothTunedWatchdog = nil
-                    // Both untuned - stop wiggle and reset greet
+                    if case .inCall = state {
+                        if self.negotiationMediaReady {
+                            await endCall(reason: "both untuned while inCall")
+                        } else {
+                            logger.error("Both untuned while inCall but offer/answer not ready; staying inCall — not tearing down")
+                            self.startPeerUntunedGrace()
+                        }
+                    }
                     await stopWaitingAnimation()
                     hasPlayedGreet = false
                 }
@@ -650,11 +670,12 @@ final class WalkieTalkieLink {
         if isSeatA {
             do {
                 let offer = try await audioLayer.createOffer(iceServers: iceServers)
+                negotiationMediaReady = true
                 logger.info("Created offer, sending to peer")
                 await sendOffer(offer)
                 logger.info("Offer sent")
             } catch {
-                logger.error("createOffer failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("createOffer failed: \(error.localizedDescription, privacy: .public); staying \(String(describing: self.state), privacy: .public) (will not silently endCall)")
             }
         }
         
@@ -721,6 +742,9 @@ final class WalkieTalkieLink {
             do {
                 await fetchICEServers()
                 let answer = try await audioLayer.setOffer(offerJSON, iceServers: iceServers)
+                negotiationMediaReady = true
+                peerUntunedGraceTask?.cancel()
+                peerUntunedGraceTask = nil
                 logger.info("Created answer, sending to peer")
                 await sendAnswer(answer)
                 logger.info("Answer sent")
@@ -730,7 +754,7 @@ final class WalkieTalkieLink {
                 await stopWaitingAnimation()
                 NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
             } catch {
-                logger.error("handleOffer failed: \(error.localizedDescription, privacy: .public)")
+                logger.error("handleOffer failed: \(error.localizedDescription, privacy: .public); staying \(String(describing: self.state), privacy: .public) so a later offer can retry (will not silently endCall)")
             }
         } else if offerJSON != nil, isSeatA {
             logger.warning("Received offer but I am seat A (offerer), ignoring")
@@ -952,7 +976,7 @@ final class WalkieTalkieLink {
             
         case .inCall:
             // Hang up
-            await endCall()
+            await endCall(reason: "single tap hangup")
             
         default:
             break
@@ -1071,15 +1095,31 @@ final class WalkieTalkieLink {
         await fetchICEServers()
     }
     
-    private func endCall() async {
+    private func startPeerUntunedGrace() {
+        peerUntunedGraceTask?.cancel()
+        peerUntunedGraceTask = Task {
+            try? await Task.sleep(for: .seconds(8))
+            guard !Task.isCancelled else { return }
+            if case .inCall = self.state, !self.peerTuned {
+                await self.endCall(reason: "peer stayed untuned for 8s before offer/answer")
+            }
+        }
+    }
+
+    private func endCall(reason: String) async {
+        let seat = isSeatA ? "A" : "B"
+        logger.info("endCall: \(reason, privacy: .public) state=\(String(describing: self.state), privacy: .public) seat=\(seat, privacy: .public) peerTuned=\(self.peerTuned, privacy: .public) mediaReady=\(self.negotiationMediaReady, privacy: .public)")
         iceRefreshTimer?.cancel()
         iceRefreshTimer = nil
+        peerUntunedGraceTask?.cancel()
+        peerUntunedGraceTask = nil
         
         resetTalkIntent()
         audioLayer.cleanup()
         applyTalkIntent()
         
         negotiationID = nil
+        negotiationMediaReady = false
         hasPlayedGreet = false
         
         state = .connected(tuned: false)
@@ -1113,12 +1153,14 @@ final class WalkieTalkieLink {
         iceRefreshTimer?.cancel()
         streamHealthTimer?.cancel()
         bothTunedWatchdog?.cancel()
+        peerUntunedGraceTask?.cancel()
         eventTask = nil
         presenceTask = nil
         waitingTimer = nil
         iceRefreshTimer = nil
         streamHealthTimer = nil
         bothTunedWatchdog = nil
+        peerUntunedGraceTask = nil
     }
 
     private func makeLeaveRequest() -> URLRequest? {
@@ -1167,6 +1209,7 @@ final class WalkieTalkieLink {
         sessionToken = nil
         revision = 0
         negotiationID = nil
+        negotiationMediaReady = false
         peerTuned = false
         hasPlayedGreet = false
         channelFull = false

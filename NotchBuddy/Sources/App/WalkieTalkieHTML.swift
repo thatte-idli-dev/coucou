@@ -41,13 +41,6 @@ let remoteAnalyser = null;
 let levelTimer = null;
 const remoteAudio = document.getElementById('remoteAudio');
 
-if (!navigator.mediaDevices) {
-    postNative({
-        type: 'error',
-        message: 'navigator.mediaDevices is undefined (secure context required)'
-    });
-}
-
 function postLog(message) {
     postNative({
         type: 'log',
@@ -59,6 +52,29 @@ function errorName(err) {
     if (!err) return 'unknown';
     if (err.name) return err.name;
     return String(err);
+}
+
+function errorParts(err) {
+    const name = (err && err.name) ? String(err.name) : 'Error';
+    const message = (err && err.message) ? String(err.message) : String(err);
+    return 'name=' + name + ' message=' + message;
+}
+
+function envSnapshot() {
+    const devices = !!(navigator.mediaDevices);
+    const getUM = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+    const secure = !!(window.isSecureContext);
+    const origin = (typeof location !== 'undefined' && location.origin) ? location.origin : 'none';
+    const href = (typeof location !== 'undefined' && location.href) ? location.href : 'none';
+    return 'mediaDevices=' + devices + ' getUserMedia=' + getUM + ' isSecureContext=' + secure + ' origin=' + origin + ' href=' + href;
+}
+
+postLog('env ' + envSnapshot());
+if (!navigator.mediaDevices) {
+    postNative({
+        type: 'error',
+        message: 'navigator.mediaDevices is undefined (secure context required) ' + envSnapshot()
+    });
 }
 
 function withTimeout(promise, ms, label) {
@@ -86,6 +102,7 @@ function setMicEnabled(enabled) {
 
 async function ensureStream() {
     if (!stream) {
+        postLog('env ' + envSnapshot());
         postLog('getUserMedia start');
         try {
             stream = await withTimeout(
@@ -95,7 +112,7 @@ async function ensureStream() {
             );
             postLog('getUserMedia ok');
         } catch (err) {
-            postLog('getUserMedia err ' + errorName(err));
+            postLog('getUserMedia err ' + errorParts(err));
             throw err;
         }
         audioTrack = stream.getAudioTracks()[0] || null;
@@ -113,10 +130,10 @@ async function probeMic() {
         await ensureStream();
         const n = stream ? stream.getAudioTracks().length : 0;
         postLog('probeMic ok tracks=' + n);
-        return true;
+        return 'ok:' + n;
     } catch (err) {
-        postLog('probeMic err ' + errorName(err));
-        return false;
+        postLog('probeMic err ' + errorParts(err));
+        return 'fail:' + errorParts(err);
     }
 }
 
