@@ -91,6 +91,13 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Client A is waiting")
         
+        // Assert that A's mic is enabled even while waiting (before peer joins)
+        guard audioA.micEnabled else {
+            throw TestError("Client A's mic should be enabled while waiting for peer")
+        }
+        
+        print("✓ Client A's mic is live while waiting")
+        
         // Client B presses PTT
         await linkB.simulatePTTDown()
         

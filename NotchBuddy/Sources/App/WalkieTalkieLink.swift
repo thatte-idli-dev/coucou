@@ -368,12 +368,6 @@ final class WalkieTalkieLink: @unchecked Sendable {
             return
         }
         
-        // Enforce rule: only enter call when peer is confirmed tuned by server
-        guard peerTuned else {
-            assertionFailure("startNegotiation called without peer tuned - should only enter call when server confirms both tuned")
-            return
-        }
-        
         let hasPermission = await audioLayer.checkMicPermission()
         guard hasPermission else {
             await showMicPermissionAlert()
@@ -388,6 +382,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             false
         }
         
+        // Set up audio layer and enable mic immediately, even if peer not tuned yet
         await audioLayer.setupWebView(
             onIceCandidate: { [weak self] candidate in
                 Task { await self?.sendIceCandidate(candidate) }
@@ -406,6 +401,12 @@ final class WalkieTalkieLink: @unchecked Sendable {
             } catch {
                 logger.error("createOffer failed: \(error.localizedDescription)")
             }
+        }
+        
+        // Only transition to .inCall when peer is confirmed tuned by server
+        guard peerTuned else {
+            // Mic is live, but stay in .waiting until peer joins
+            return
         }
         
         state = .inCall(mode: .pushToTalk(transmitting: micEnabled))
