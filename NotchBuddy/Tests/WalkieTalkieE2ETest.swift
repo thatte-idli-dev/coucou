@@ -30,18 +30,20 @@ enum WalkieState: Equatable, Sendable {
 struct WalkieTalkieE2ETest {
     static func main() async {
         guard CommandLine.arguments.count > 3 else {
-            print("❌ Usage: walkie-e2e-test <server-url> <access-code-a> <access-code-b>")
+            print("❌ Usage: walkie-e2e-test <server-url> <access-code> <access-code>")
+            print("   (Both clients use the same access code - first becomes seat A, second becomes seat B)")
             exit(1)
         }
         
         let serverURL = CommandLine.arguments[1]
-        let accessCodeA = CommandLine.arguments[2]
-        let accessCodeB = CommandLine.arguments[3]
+        let accessCode = CommandLine.arguments[2]
+        // Both arguments are the same code, but we accept two for compatibility
         
         print("🔗 Testing against server: \(serverURL)")
+        print("🎫 Using shared access code (first=A, second=B)")
         
         do {
-            try await runAllTests(serverURL: serverURL, accessCodeA: accessCodeA, accessCodeB: accessCodeB)
+            try await runAllTests(serverURL: serverURL, accessCode: accessCode)
             print("\n✅ All E2E tests passed!")
             exit(0)
         } catch {
@@ -50,26 +52,26 @@ struct WalkieTalkieE2ETest {
         }
     }
     
-    static func runAllTests(serverURL: String, accessCodeA: String, accessCodeB: String) async throws {
+    static func runAllTests(serverURL: String, accessCode: String) async throws {
         // Test 1: Full call flow with signaling
-        try await testFullCallFlow(serverURL: serverURL, accessCodeA: accessCodeA, accessCodeB: accessCodeB)
+        try await testFullCallFlow(serverURL: serverURL, accessCode: accessCode)
         
         // Test 2: Tap to hang up
-        try await testTapToHangup(serverURL: serverURL, accessCodeA: accessCodeA, accessCodeB: accessCodeB)
+        try await testTapToHangup(serverURL: serverURL, accessCode: accessCode)
         
         // Test 3: Tap to cancel waiting
-        try await testTapToCancelWaiting(serverURL: serverURL, accessCodeA: accessCodeA)
+        try await testTapToCancelWaiting(serverURL: serverURL, accessCode: accessCode)
         
         // Test 4: Waiting timeout
-        try await testWaitingTimeout(serverURL: serverURL, accessCodeA: accessCodeA)
+        try await testWaitingTimeout(serverURL: serverURL, accessCode: accessCode)
         
         // Test 5: TURN credentials verification
-        try await testTURNCredentials(serverURL: serverURL, accessCodeA: accessCodeA)
+        try await testTURNCredentials(serverURL: serverURL, accessCode: accessCode)
     }
     
     // MARK: - Test 1: Full Call Flow
     
-    static func testFullCallFlow(serverURL: String, accessCodeA: String, accessCodeB: String) async throws {
+    static func testFullCallFlow(serverURL: String, accessCode: String) async throws {
         print("\n📞 Test 1: Full call flow with bidirectional signaling")
         print("=====================================================")
         
@@ -80,9 +82,10 @@ struct WalkieTalkieE2ETest {
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
         let linkB = TestWalkieTalkieLink(audioLayer: audioB)
         
-        // Configure both clients
-        await linkA.configure(serverURL: serverURL, accessCode: accessCodeA)
-        await linkB.configure(serverURL: serverURL, accessCode: accessCodeB)
+        // Configure both clients with the same access code
+        // The first to connect becomes seat A, the second becomes seat B
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
         
         // Wait for SSE connection and snapshot to arrive
         print("  ⏳ Waiting for SSE connection...")
@@ -157,7 +160,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 2: Tap to Hang Up
     
-    static func testTapToHangup(serverURL: String, accessCodeA: String, accessCodeB: String) async throws {
+    static func testTapToHangup(serverURL: String, accessCode: String) async throws {
         print("\n👆 Test 2: Tap to hang up")
         print("=========================")
         
@@ -167,8 +170,8 @@ struct WalkieTalkieE2ETest {
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
         let linkB = TestWalkieTalkieLink(audioLayer: audioB)
         
-        await linkA.configure(serverURL: serverURL, accessCode: accessCodeA)
-        await linkB.configure(serverURL: serverURL, accessCode: accessCodeB)
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
         
         try await Task.sleep(for: .seconds(1))
         
@@ -218,14 +221,14 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 3: Tap to Cancel Waiting
     
-    static func testTapToCancelWaiting(serverURL: String, accessCodeA: String) async throws {
+    static func testTapToCancelWaiting(serverURL: String, accessCode: String) async throws {
         print("\n🚫 Test 3: Tap to cancel waiting")
         print("=================================")
         
         let audioA = FakeAudioLayer()
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
         
-        await linkA.configure(serverURL: serverURL, accessCode: accessCodeA)
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
         try await Task.sleep(for: .seconds(1))
         
         // A tunes alone (waiting)
@@ -257,7 +260,7 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 4: Waiting Timeout
     
-    static func testWaitingTimeout(serverURL: String, accessCodeA: String) async throws {
+    static func testWaitingTimeout(serverURL: String, accessCode: String) async throws {
         print("\n⏱️  Test 4: Waiting timeout (30s)")
         print("=================================")
         
@@ -267,7 +270,7 @@ struct WalkieTalkieE2ETest {
         // Override timeout for faster test
         await linkA.setWaitingTimeout(2.0)  // 2 seconds for test
         
-        await linkA.configure(serverURL: serverURL, accessCode: accessCodeA)
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
         try await Task.sleep(for: .seconds(1))
         
         // A tunes alone (waiting)
@@ -305,14 +308,14 @@ struct WalkieTalkieE2ETest {
     
     // MARK: - Test 5: TURN Credentials
     
-    static func testTURNCredentials(serverURL: String, accessCodeA: String) async throws {
+    static func testTURNCredentials(serverURL: String, accessCode: String) async throws {
         print("\n🔐 Test 5: TURN credentials verification")
         print("==========================================")
         
         let audioA = FakeAudioLayer()
         let linkA = TestWalkieTalkieLink(audioLayer: audioA)
         
-        await linkA.configure(serverURL: serverURL, accessCode: accessCodeA)
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
         try await Task.sleep(for: .seconds(1))
         
         // Trigger ICE server fetch by tuning

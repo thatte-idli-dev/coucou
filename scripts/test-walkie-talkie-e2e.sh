@@ -64,17 +64,17 @@ with open('$CONFIG_FILE', 'w') as f:
 
 chmod 0600 "$CONFIG_FILE"
 
-# Extract first two access codes for testing
-ACCESS_CODE_1=$(grep "Channel 1:" "$ACCESS_CODES_FILE" | cut -d' ' -f3)
-ACCESS_CODE_2=$(grep "Channel 2:" "$ACCESS_CODES_FILE" | cut -d' ' -f3)
+# Extract channel 1 access code - both clients will use the same code
+# The first to connect becomes seat A, the second becomes seat B
+ACCESS_CODE=$(grep "Channel 1:" "$ACCESS_CODES_FILE" | cut -d' ' -f3)
 
-if [ -z "$ACCESS_CODE_1" ] || [ -z "$ACCESS_CODE_2" ]; then
-    echo "❌ Error: Failed to extract access codes"
+if [ -z "$ACCESS_CODE" ]; then
+    echo "❌ Error: Failed to extract access code"
     cat "$ACCESS_CODES_FILE"
     exit 1
 fi
 
-echo "✅ Server configured with access codes and TURN"
+echo "✅ Server configured with access code and TURN"
 echo
 
 # Start the server
@@ -129,7 +129,7 @@ echo "🧪 Running E2E test..."
 echo "===================="
 echo
 
-"$TEST_BUILD_DIR/walkie-e2e-test" http://localhost:8080 "$ACCESS_CODE_1" "$ACCESS_CODE_2"
+"$TEST_BUILD_DIR/walkie-e2e-test" http://localhost:8080 "$ACCESS_CODE" "$ACCESS_CODE"
 
 TEST_EXIT_CODE=$?
 
