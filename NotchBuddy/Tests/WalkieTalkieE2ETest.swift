@@ -154,15 +154,18 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Bidirectional SDP exchange verified")
         
+        // Wait for ICE candidate exchange (candidates are gathered after offer/answer)
+        try await Task.sleep(for: .milliseconds(200))
+        
         // Assert ICE candidates exchanged
         guard !offererAudio.receivedIceCandidates.isEmpty else {
-            throw TestError("Client \(offererName) (offerer) did not receive ICE candidates")
+            throw TestError("Client \(offererName) (offerer) did not receive ICE candidates (received \(offererAudio.receivedIceCandidates.count))")
         }
         guard !answererAudio.receivedIceCandidates.isEmpty else {
-            throw TestError("Client \(answererName) (answerer) did not receive ICE candidates")
+            throw TestError("Client \(answererName) (answerer) did not receive ICE candidates (received \(answererAudio.receivedIceCandidates.count))")
         }
         
-        print("✓ ICE candidates exchanged")
+        print("✓ ICE candidates exchanged (offerer: \(offererAudio.receivedIceCandidates.count), answerer: \(answererAudio.receivedIceCandidates.count))")
         
         // Client A releases PTT
         await linkA.simulatePTTUp()
