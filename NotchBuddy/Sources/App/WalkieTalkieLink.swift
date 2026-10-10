@@ -31,8 +31,11 @@ enum WalkieState: Equatable, Sendable {
     }
 }
 
-final class WalkieTalkieLink: @unchecked Sendable {
-    @MainActor
+/// Walkie session state machine. Isolated on the main actor so hotkeys, SSE
+/// state updates, NotificationCenter posts and AppState/BotEngine touches
+/// never hop off-main (that crashed SwiftUI TimelineView isolation checks).
+@MainActor
+final class WalkieTalkieLink {
     static let shared = WalkieTalkieLink(audioLayer: WalkieTalkieAudio.shared)
     
     private var state: WalkieState = .disconnected {
@@ -98,52 +101,34 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     var waitingTimeout: TimeInterval = 30  // Injectable for tests
     
-    @MainActor
     init(audioLayer: WalkieAudioLayer) {
         self.audioLayer = audioLayer
-        
+        observeWalkieNotification(.walkiePTTDown, action: .pttDown)
+        observeWalkieNotification(.walkiePTTUp, action: .pttUp)
+        observeWalkieNotification(.walkieDoubleTap, action: .doubleTap)
+        observeWalkieNotification(.walkieTap, action: .tap)
+    }
+    
+    private enum WalkieHotkeyAction: Sendable {
+        case pttDown, pttUp, doubleTap, tap
+    }
+    
+    private func observeWalkieNotification(_ name: Notification.Name, action: WalkieHotkeyAction) {
         NotificationCenter.default.addObserver(
-            forName: .walkiePTTDown,
+            forName: name,
             object: nil,
             queue: .main
         ) { [weak self] notification in
-            guard let self else { return }
-            // Only respond if notification is broadcast (nil) or targeted to this instance
-            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
-                Task { await self.handlePTTDown() }
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: .walkiePTTUp,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self else { return }
-            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
-                Task { await self.handlePTTUp() }
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: .walkieDoubleTap,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self else { return }
-            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
-                Task { await self.handleDoubleTap() }
-            }
-        }
-        
-        NotificationCenter.default.addObserver(
-            forName: .walkieTap,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard let self else { return }
-            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
-                Task { await self.handleTap() }
+            let object = notification.object
+            Task { @MainActor in
+                guard let self else { return }
+                guard object == nil || (object as? WalkieTalkieLink) === self else { return }
+                switch action {
+                case .pttDown: await self.handlePTTDown()
+                case .pttUp: await self.handlePTTUp()
+                case .doubleTap: await self.handleDoubleTap()
+                case .tap: await self.handleTap()
+                }
             }
         }
     }
@@ -188,73 +173,99 @@ final class WalkieTalkieLink: @unchecked Sendable {
         await startStreamHealthMonitor()
     }
     
+    private func makeEventsRequest() -> URLRequest? {
+        guard let serverURL, let channelToken else { return nil }
+        let baseURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let urlStr = "\(baseURL)/v3/channels/\(channelNumber)/events"
+        guard let url = URL(string: urlStr) else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(channelToken)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+    
     private func startEventStream() async {
         eventTask?.cancel()
         
-        guard let serverURL, let channelToken else { return }
+        guard let request = makeEventsRequest() else { return }
+        logger.info("SSE: Connecting to \(request.url?.absoluteString ?? "", privacy: .public)")
         
-        let baseURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        let urlStr = "\(baseURL)/v3/channels/\(channelNumber)/events"
-        guard let url = URL(string: urlStr) else { return }
-        
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(channelToken)", forHTTPHeaderField: "Authorization")
-        
-        logger.info("SSE: Connecting to \(urlStr, privacy: .public)")
-        
-        eventTask = Task {
+        // I/O stays off the main actor; every state / UI hop goes through @MainActor methods.
+        eventTask = Task.detached { [weak self] in
             while !Task.isCancelled {
                 do {
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
-                    
-                    if let httpResp = response as? HTTPURLResponse {
-                        if httpResp.statusCode == 409 {
-                            logger.error("SSE: Channel full (409)")
-                            channelFull = true
-                            await disconnect()
+                    if let status = (response as? HTTPURLResponse)?.statusCode {
+                        switch await self?.consumeEventHTTPStatus(status) ?? .stop {
+                        case .stop:
                             return
-                        }
-                        
-                        if httpResp.statusCode == 401 {
-                            logger.error("SSE: Authentication failed (401)")
-                            await disconnect()
-                            return
-                        }
-                        
-                        guard httpResp.statusCode == 200 else {
-                            logger.warning("SSE: HTTP \(httpResp.statusCode, privacy: .public), will retry")
-                            try? await Task.sleep(for: .seconds(reconnectBackoff()))
+                        case .retry(let seconds):
+                            try? await Task.sleep(for: .seconds(seconds))
                             continue
+                        case .proceed:
+                            break
                         }
-                        
-                        logger.info("SSE: Connected (200)")
                     }
-                    
-                    reconnectAttempts = 0
-                    lastEventTime = Date()
                     
                     for try await line in bytes.lines {
                         if Task.isCancelled { break }
-                        lastEventTime = Date()
-                        await handleSSELine(line)
+                        await self?.handleSSELine(line)
                     }
                     
-                    // Stream ended, reset and reconnect
                     if !Task.isCancelled {
-                        logger.warning("SSE stream ended, reconnecting...")
-                        await reconnect()
-                        try? await Task.sleep(for: .seconds(reconnectBackoff()))
+                        await self?.noteSSEStreamEnded()
+                        if let backoff = await self?.nextReconnectBackoff() {
+                            try? await Task.sleep(for: .seconds(backoff))
+                        }
                     }
                 } catch {
                     if Task.isCancelled { break }
-                    logger.error("SSE error: \(error.localizedDescription, privacy: .public)")
-                    try? await Task.sleep(for: .seconds(reconnectBackoff()))
+                    await self?.noteSSEError(error)
+                    if let backoff = await self?.nextReconnectBackoff() {
+                        try? await Task.sleep(for: .seconds(backoff))
+                    }
                 }
             }
         }
     }
     
-    private func reconnectBackoff() -> Int {
+    private enum EventStreamDisposition {
+        case stop
+        case retry(seconds: Int)
+        case proceed
+    }
+    
+    private func consumeEventHTTPStatus(_ status: Int) async -> EventStreamDisposition {
+        if status == 409 {
+            logger.error("SSE: Channel full (409)")
+            channelFull = true
+            await disconnect()
+            return .stop
+        }
+        if status == 401 {
+            logger.error("SSE: Authentication failed (401)")
+            await disconnect()
+            return .stop
+        }
+        guard status == 200 else {
+            logger.warning("SSE: HTTP \(status, privacy: .public), will retry")
+            return .retry(seconds: nextReconnectBackoff())
+        }
+        logger.info("SSE: Connected (200)")
+        reconnectAttempts = 0
+        lastEventTime = Date()
+        return .proceed
+    }
+    
+    private func noteSSEStreamEnded() async {
+        logger.warning("SSE stream ended, reconnecting...")
+        await reconnect()
+    }
+    
+    private func noteSSEError(_ error: Error) {
+        logger.error("SSE error: \(error.localizedDescription, privacy: .public)")
+    }
+    
+    private func nextReconnectBackoff() -> Int {
         reconnectAttempts += 1
         let backoffs = [1, 2, 4, 8, 30]
         return backoffs[min(reconnectAttempts - 1, backoffs.count - 1)]
@@ -296,6 +307,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func handleSSELine(_ line: String) async {
+        lastEventTime = Date()
         if line.hasPrefix("event: ") {
             currentSSEEvent = String(line.dropFirst(7))
         } else if line.hasPrefix("data: ") {
@@ -465,10 +477,14 @@ final class WalkieTalkieLink: @unchecked Sendable {
         // Mic and CallMode come from explicit hold / hands-free intent, not from .waiting
         await audioLayer.setupWebView(
             onIceCandidate: { [weak self] candidate in
-                Task { await self?.sendIceCandidate(candidate) }
+                Task { @MainActor in
+                    await self?.sendIceCandidate(candidate)
+                }
             },
             onAnswer: { [weak self] answer in
-                Task { await self?.sendAnswer(answer) }
+                Task { @MainActor in
+                    await self?.sendAnswer(answer)
+                }
             }
         )
         
@@ -667,10 +683,14 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
             await audioLayer.setupWebView(
                 onIceCandidate: { [weak self] candidate in
-                    Task { await self?.sendIceCandidate(candidate) }
+                    Task { @MainActor in
+                        await self?.sendIceCandidate(candidate)
+                    }
                 },
                 onAnswer: { [weak self] answer in
-                    Task { await self?.sendAnswer(answer) }
+                    Task { @MainActor in
+                        await self?.sendAnswer(answer)
+                    }
                 }
             )
             await applyTalkIntent()
@@ -742,10 +762,14 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
             await audioLayer.setupWebView(
                 onIceCandidate: { [weak self] candidate in
-                    Task { await self?.sendIceCandidate(candidate) }
+                    Task { @MainActor in
+                        await self?.sendIceCandidate(candidate)
+                    }
                 },
                 onAnswer: { [weak self] answer in
-                    Task { await self?.sendAnswer(answer) }
+                    Task { @MainActor in
+                        await self?.sendAnswer(answer)
+                    }
                 }
             )
             await applyTalkIntent()
@@ -817,9 +841,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func playGreetOnce() async {
         if !hasPlayedGreet {
             hasPlayedGreet = true
-            await MainActor.run {
-                SoundEngine.shared.play("greet")
-            }
+            SoundEngine.shared.play("greet")
         }
     }
     
@@ -971,7 +993,6 @@ final class WalkieTalkieLink: @unchecked Sendable {
         state = .disconnected
     }
     
-    @MainActor
     private func showMicPermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "Microphone Access Required"
@@ -986,7 +1007,6 @@ final class WalkieTalkieLink: @unchecked Sendable {
         }
     }
     
-    @MainActor
     private func showChannelFullAlert() {
         let alert = NSAlert()
         alert.messageText = "Channel Full"

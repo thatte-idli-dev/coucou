@@ -12,8 +12,8 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
     
     private var window: NSWindow?
     private var webView: WKWebView?
-    private var onIceCandidate: ((String) -> Void)?
-    private var onAnswer: ((String) -> Void)?
+    private var onIceCandidate: (@MainActor (String) -> Void)?
+    private var onAnswer: (@MainActor (String) -> Void)?
     
     private override init() {
         super.init()
@@ -23,7 +23,10 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         return await AVAudioApplication.requestRecordPermission()
     }
     
-    func setupWebView(onIceCandidate: @escaping (String) -> Void, onAnswer: @escaping (String) -> Void) {
+    func setupWebView(
+        onIceCandidate: @escaping @MainActor (String) -> Void,
+        onAnswer: @escaping @MainActor (String) -> Void
+    ) {
         guard webView == nil else { return }
         
         self.onIceCandidate = onIceCandidate
@@ -162,14 +165,16 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         onAnswer = nil
     }
     
-    func webView(
+    nonisolated func webView(
         _ webView: WKWebView,
         requestMediaCapturePermissionFor origin: WKSecurityOrigin,
         initiatedByFrame frame: WKFrameInfo,
         type: WKMediaCaptureType,
         decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
     ) {
-        decisionHandler(.grant)
+        Task { @MainActor in
+            decisionHandler(.grant)
+        }
     }
     
     nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

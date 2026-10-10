@@ -3,8 +3,8 @@ import Foundation
 /// Fake audio layer for testing walkie-talkie without WebView
 @MainActor
 final class FakeAudioLayer: WalkieAudioLayer {
-    var onIceCandidate: ((String) -> Void)?
-    var onAnswer: ((String) -> Void)?
+    var onIceCandidate: (@MainActor (String) -> Void)?
+    var onAnswer: (@MainActor (String) -> Void)?
     var micEnabled: Bool = false
     var setupCalled: Bool = false
     var cleanupCalled: Bool = false
@@ -23,7 +23,10 @@ final class FakeAudioLayer: WalkieAudioLayer {
         return true
     }
     
-    func setupWebView(onIceCandidate: @escaping (String) -> Void, onAnswer: @escaping (String) -> Void) {
+    func setupWebView(
+        onIceCandidate: @escaping @MainActor (String) -> Void,
+        onAnswer: @escaping @MainActor (String) -> Void
+    ) {
         self.onIceCandidate = onIceCandidate
         self.onAnswer = onAnswer
         setupCalled = true
@@ -42,7 +45,7 @@ final class FakeAudioLayer: WalkieAudioLayer {
         
         if shouldSimulateCallFlow {
             // Simulate ICE candidate gathering
-            Task {
+            Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(10))
                 let candidate = """
                 {"candidate":"candidate:1 1 UDP 2130706431 192.168.1.100 51234 typ host","sdpMid":"0","sdpMLineIndex":0}
@@ -65,7 +68,7 @@ final class FakeAudioLayer: WalkieAudioLayer {
         
         if shouldSimulateCallFlow {
             // Simulate ICE candidate gathering
-            Task {
+            Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(10))
                 let candidate = """
                 {"candidate":"candidate:1 1 UDP 2130706431 192.168.1.101 51235 typ host","sdpMid":"0","sdpMLineIndex":0}

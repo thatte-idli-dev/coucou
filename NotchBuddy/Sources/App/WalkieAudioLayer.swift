@@ -5,7 +5,10 @@ import Foundation
 @MainActor
 protocol WalkieAudioLayer {
     func checkMicPermission() async -> Bool
-    func setupWebView(onIceCandidate: @escaping (String) -> Void, onAnswer: @escaping (String) -> Void)
+    func setupWebView(
+        onIceCandidate: @escaping @MainActor (String) -> Void,
+        onAnswer: @escaping @MainActor (String) -> Void
+    )
     func setMicEnabled(_ enabled: Bool)
     func setOffer(_ offer: String, iceServers: [[String: Any]]) async throws -> String
     func createOffer(iceServers: [[String: Any]]) async throws -> String
