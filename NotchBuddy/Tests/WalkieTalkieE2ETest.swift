@@ -169,23 +169,31 @@ struct WalkieTalkieE2ETest {
         
         // Client A releases PTT
         await linkA.simulatePTTUp()
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(200))
+        
+        // Assert A is still in call with mic off (release PTT doesn't end call)
+        guard case .inCall(mode: .pushToTalk(transmitting: false)) = linkA.currentState else {
+            throw TestError("Client A should still be in call with mic off after releasing PTT, got \(linkA.currentState)")
+        }
+        guard !audioA.micEnabled else {
+            throw TestError("Client A's mic should be off after releasing PTT")
+        }
+        
+        print("✓ Client A still in call with mic off after PTT release")
         
         // Client B releases PTT
         await linkB.simulatePTTUp()
-        try await Task.sleep(for: .milliseconds(500))
+        try await Task.sleep(for: .milliseconds(200))
         
-        // Both should return to connected/untuned
-        let stateA = linkA.currentState
-        let stateB = linkB.currentState
-        guard case .connected(tuned: false) = stateA else {
-            throw TestError("Client A should be connected/untuned, got \(stateA)")
+        // Assert B is still in call with mic off
+        guard case .inCall(mode: .pushToTalk(transmitting: false)) = linkB.currentState else {
+            throw TestError("Client B should still be in call with mic off after releasing PTT, got \(linkB.currentState)")
         }
-        guard case .connected(tuned: false) = stateB else {
-            throw TestError("Client B should be connected/untuned, got \(stateB)")
+        guard !audioB.micEnabled else {
+            throw TestError("Client B's mic should be off after releasing PTT")
         }
         
-        print("✓ Both clients returned to untuned")
+        print("✓ Both clients still in call with mics off")
         
         // Cleanup
         await linkA.disconnect()
