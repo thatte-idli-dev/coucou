@@ -44,6 +44,15 @@ struct WalkieTalkieE2ETest {
         
         // Test 5: TURN credentials verification
         try await testTURNCredentials(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 6: Release PTT while waiting — mic must stay off after peer joins
+        try await testReleaseWhileWaitingKeepsMicOff(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 7: Double-tap while waiting — call starts hands-free
+        try await testDoubleTapWhileWaitingStartsHandsFree(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 8: Answerer mic matches CallMode after the offer
+        try await testAnswererMicMatchesCallMode(serverURL: serverURL, accessCode: accessCode)
     }
     
     // MARK: - Test 1: Full Call Flow
@@ -449,6 +458,189 @@ struct WalkieTalkieE2ETest {
         
         print("✅ Test 5 passed")
     }
+    
+    // MARK: - Test 6: Release while waiting keeps mic off
+    
+    @MainActor
+    static func testReleaseWhileWaitingKeepsMicOff(serverURL: String, accessCode: String) async throws {
+        print("\n🔇 Test 6: Release PTT while waiting — mic stays off after peer joins")
+        print("===================================================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await Task.sleep(for: .milliseconds(500))
+        
+        await linkA.simulatePTTDown()
+        try await waitUntilWaiting(linkA, label: "Client A")
+        guard audioA.micEnabled else {
+            throw TestError("Client A's mic should be on while holding")
+        }
+        
+        await linkA.simulatePTTUp()
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .waiting = linkA.currentState else {
+            throw TestError("Client A should still be waiting after release, got \(linkA.currentState)")
+        }
+        guard !audioA.micEnabled else {
+            throw TestError("Client A's mic should be off after releasing PTT while waiting")
+        }
+        
+        print("✓ Client A released PTT while waiting; mic off")
+        
+        await linkB.simulatePTTDown()
+        try await waitUntilBothInCall(linkA, linkB)
+        
+        guard case .inCall(mode: .pushToTalk(transmitting: false)) = linkA.currentState else {
+            throw TestError("Client A should be inCall PTT muted after peer joins, got \(linkA.currentState)")
+        }
+        guard !audioA.micEnabled else {
+            throw TestError("Client A's mic should stay off after peer joins (nothing held)")
+        }
+        
+        try assertMicMatchesCallMode(state: linkB.currentState, micEnabled: audioB.micEnabled, label: "Client B")
+        
+        print("✓ Client A in call with mic off; Client B mic matches CallMode")
+        
+        await linkA.disconnect()
+        await linkB.disconnect()
+        print("✅ Test 6 passed")
+    }
+    
+    // MARK: - Test 7: Double-tap while waiting starts hands-free
+    
+    @MainActor
+    static func testDoubleTapWhileWaitingStartsHandsFree(serverURL: String, accessCode: String) async throws {
+        print("\n✋ Test 7: Double-tap while waiting — call starts hands-free")
+        print("==========================================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await Task.sleep(for: .milliseconds(500))
+        
+        await linkA.simulatePTTDown()
+        try await waitUntilWaiting(linkA, label: "Client A")
+        
+        await linkA.simulateDoubleTap()
+        try await Task.sleep(for: .milliseconds(100))
+        guard case .waiting = linkA.currentState else {
+            throw TestError("Client A should still be waiting after double-tap, got \(linkA.currentState)")
+        }
+        guard audioA.micEnabled else {
+            throw TestError("Client A's mic should be on after double-tap (hands-free)")
+        }
+        
+        print("✓ Client A double-tapped while waiting; mic on")
+        
+        await linkB.simulatePTTDown()
+        try await waitUntilBothInCall(linkA, linkB)
+        
+        guard case .inCall(mode: .handsFree) = linkA.currentState else {
+            throw TestError("Client A should be inCall handsFree after peer joins, got \(linkA.currentState)")
+        }
+        guard audioA.micEnabled else {
+            throw TestError("Client A's mic should stay on in hands-free")
+        }
+        
+        try assertMicMatchesCallMode(state: linkB.currentState, micEnabled: audioB.micEnabled, label: "Client B")
+        
+        print("✓ Client A in call hands-free with mic on; Client B mic matches CallMode")
+        
+        await linkA.disconnect()
+        await linkB.disconnect()
+        print("✅ Test 7 passed")
+    }
+    
+    // MARK: - Test 8: Answerer mic matches CallMode after offer
+    
+    @MainActor
+    static func testAnswererMicMatchesCallMode(serverURL: String, accessCode: String) async throws {
+        print("\n🎧 Test 8: Answerer mic matches CallMode after the offer")
+        print("======================================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await Task.sleep(for: .milliseconds(500))
+        
+        await linkA.simulatePTTDown()
+        try await waitUntilWaiting(linkA, label: "Client A")
+        await linkB.simulatePTTDown()
+        try await waitUntilBothInCall(linkA, linkB)
+        
+        let (answererLink, answererAudio, answererName): (WalkieTalkieLink, FakeAudioLayer, String) =
+            linkA.isAssignedSeatA ? (linkB, audioB, "B") : (linkA, audioA, "A")
+        
+        guard answererAudio.remoteOffer != nil else {
+            throw TestError("Answerer \(answererName) did not receive an offer")
+        }
+        
+        try assertMicMatchesCallMode(
+            state: answererLink.currentState,
+            micEnabled: answererAudio.micEnabled,
+            label: "Answerer \(answererName)"
+        )
+        
+        print("✓ Answerer \(answererName) mic matches CallMode (\(answererLink.currentState))")
+        
+        await linkA.disconnect()
+        await linkB.disconnect()
+        print("✅ Test 8 passed")
+    }
+    
+    @MainActor
+    static func waitUntilWaiting(_ link: WalkieTalkieLink, label: String) async throws {
+        var attempts = 0
+        while true {
+            if case .waiting = link.currentState { return }
+            if attempts >= 20 {
+                throw TestError("\(label) should be waiting (state: \(link.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            attempts += 1
+        }
+    }
+    
+    @MainActor
+    static func waitUntilBothInCall(_ linkA: WalkieTalkieLink, _ linkB: WalkieTalkieLink) async throws {
+        var attempts = 0
+        while true {
+            if case .inCall = linkA.currentState, case .inCall = linkB.currentState { return }
+            if attempts >= 30 {
+                throw TestError("Both should be in call (A: \(linkA.currentState), B: \(linkB.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            attempts += 1
+        }
+    }
+    
+    static func assertMicMatchesCallMode(state: WalkieState, micEnabled: Bool, label: String) throws {
+        switch state {
+        case .inCall(.handsFree):
+            guard micEnabled else {
+                throw TestError("\(label) is hands-free but mic is off")
+            }
+        case .inCall(.pushToTalk(let transmitting)):
+            guard micEnabled == transmitting else {
+                throw TestError("\(label) CallMode transmitting=\(transmitting) but micEnabled=\(micEnabled)")
+            }
+        default:
+            throw TestError("\(label) should be in call to match mic, got \(state)")
+        }
+    }
 }
 
 struct TestError: Error, CustomStringConvertible {
@@ -478,6 +670,11 @@ extension WalkieTalkieLink {
     
     func simulateTap() async {
         NotificationCenter.default.post(name: .walkieTap, object: self)
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+    
+    func simulateDoubleTap() async {
+        NotificationCenter.default.post(name: .walkieDoubleTap, object: self)
         try? await Task.sleep(for: .milliseconds(50))
     }
 }

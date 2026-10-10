@@ -23,6 +23,9 @@ let pc = null;
 let stream = null;
 let audioTrack = null;
 let wantMic = false;
+let pendingCandidates = [];
+let appliedCandidates = [];
+let remoteDescriptionSet = false;
 const remoteAudio = document.getElementById('remoteAudio');
 
 if (!navigator.mediaDevices) {
@@ -40,6 +43,7 @@ async function createOffer(iceServers) {
     }
     
     pc = new RTCPeerConnection({iceServers: iceServers});
+    remoteDescriptionSet = false;
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
     
     pc.ontrack = (e) => {
@@ -108,6 +112,7 @@ async function handleOffer(offerJSON, iceServers) {
     }
     
     pc = new RTCPeerConnection({iceServers: iceServers});
+    remoteDescriptionSet = false;
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
     
     pc.ontrack = (e) => {
@@ -165,6 +170,8 @@ async function handleOffer(offerJSON, iceServers) {
     
     const offer = JSON.parse(offerJSON);
     await pc.setRemoteDescription(offer);
+    remoteDescriptionSet = true;
+    await flushPendingCandidates();
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     return JSON.stringify(answer);
@@ -174,12 +181,34 @@ async function handleAnswer(answerJSON) {
     if (!pc) return;
     const answer = JSON.parse(answerJSON);
     await pc.setRemoteDescription(answer);
+    remoteDescriptionSet = true;
+    await flushPendingCandidates();
 }
 
 async function addIceCandidate(candidateJSON) {
-    if (!pc) return;
+    if (!pc || !remoteDescriptionSet) {
+        pendingCandidates.push(candidateJSON);
+        return;
+    }
     const candidate = JSON.parse(candidateJSON);
     await pc.addIceCandidate(candidate);
+    appliedCandidates.push(candidateJSON);
+}
+
+async function flushPendingCandidates() {
+    const queued = pendingCandidates.splice(0, pendingCandidates.length);
+    for (const candidateJSON of queued) {
+        try {
+            await pc.addIceCandidate(JSON.parse(candidateJSON));
+        } catch (err) {
+            console.error('addIceCandidate failed:', err);
+        }
+        appliedCandidates.push(candidateJSON);
+    }
+}
+
+function getIceQueueStats() {
+    return { pending: pendingCandidates.length, applied: appliedCandidates.length };
 }
 
 function setMicEnabled(enabled) {
@@ -190,6 +219,9 @@ function setMicEnabled(enabled) {
 }
 
 function cleanup() {
+    pendingCandidates = [];
+    appliedCandidates = [];
+    remoteDescriptionSet = false;
     if (pc) {
         pc.close();
         pc = null;

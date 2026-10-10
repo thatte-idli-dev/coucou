@@ -94,16 +94,66 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
     
     func startTest() {
         print("✓ Web views created and loaded\n")
+        runCandidateBeforeOfferTest()
+    }
+    
+    func runCandidateBeforeOfferTest() {
+        print("📝 Test: Queue ICE candidate arriving before the offer")
+        print("======================================================\n")
         
-        // Test ICE servers configuration
         let iceServers: [[String: Any]] = [
             ["urls": ["stun:stun.l.google.com:19302"]],
             ["urls": ["turn:turn.example.com:3478"], "username": "test", "credential": "secret"]
         ]
         
+        let earlyCandidate = """
+        {"candidate":"candidate:1 1 UDP 2130706431 192.168.1.100 51234 typ host","sdpMid":"0","sdpMLineIndex":0}
+        """
+        
+        print("🔊 Feeding candidate to peer B before any offer...")
+        webViewB.callAsyncJavaScript(
+            "return await addIceCandidate(candidateJSON)",
+            arguments: ["candidateJSON": earlyCandidate],
+            in: nil,
+            in: .page
+        ) { [weak self] result in
+            guard let self = self else { return }
+            if case .failure(let error) = result {
+                self.fail("addIceCandidate before offer failed: \(error)")
+                return
+            }
+            
+            self.webViewB.callAsyncJavaScript(
+                "return getIceQueueStats()",
+                arguments: [:],
+                in: nil,
+                in: .page
+            ) { [weak self] statsResult in
+                guard let self = self else { return }
+                switch statsResult {
+                case .success(let value):
+                    guard let stats = Self.dictionary(value),
+                          let pending = Self.intValue(stats["pending"]),
+                          let applied = Self.intValue(stats["applied"]) else {
+                        self.fail("getIceQueueStats returned unexpected value: \(String(describing: value))")
+                        return
+                    }
+                    guard pending == 1, applied == 0 else {
+                        self.fail("Candidate should be queued before offer (pending=\(pending), applied=\(applied))")
+                        return
+                    }
+                    print("✓ Candidate queued before offer (pending=1, applied=0)\n")
+                    self.createOfferThenFlushCandidate(iceServers: iceServers)
+                case .failure(let error):
+                    self.fail("getIceQueueStats failed: \(error)")
+                }
+            }
+        }
+    }
+    
+    func createOfferThenFlushCandidate(iceServers: [[String: Any]]) {
         print("🔊 Creating offer from peer A...")
         
-        // Create offer
         webViewA.callAsyncJavaScript(
             "return await createOffer(iceServers)",
             arguments: ["iceServers": iceServers],
@@ -111,39 +161,21 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
             in: .page
         ) { [weak self] result in
             guard let self = self else { return }
-            
             switch result {
             case .success(let value):
                 guard let offerStr = value as? String, !offerStr.isEmpty else {
                     self.fail("createOffer returned empty or invalid result: \(String(describing: value))")
                     return
                 }
-                
-                // Verify it's valid JSON
-                guard let data = offerStr.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let sdp = json["sdp"] as? String,
-                      let type = json["type"] as? String,
-                      type == "offer",
-                      !sdp.isEmpty else {
-                    self.fail("Offer is not valid SDP JSON")
-                    return
-                }
-                
-                print("✓ Peer A created offer:")
-                print("  Type: \(type)")
-                print("  SDP length: \(sdp.count) characters\n")
-                
-                self.handleOffer(offerStr, iceServers: iceServers)
-                
+                self.handleOfferAndAssertCandidateApplied(offerStr, iceServers: iceServers)
             case .failure(let error):
                 self.fail("Failed to create offer: \(error)")
             }
         }
     }
     
-    func handleOffer(_ offer: String, iceServers: [[String: Any]]) {
-        print("🔊 Handling offer on peer B...")
+    func handleOfferAndAssertCandidateApplied(_ offer: String, iceServers: [[String: Any]]) {
+        print("🔊 Handling offer on peer B (should flush queued candidate)...")
         
         webViewB.callAsyncJavaScript(
             "return await handleOffer(offerJSON, iceServers)",
@@ -152,35 +184,77 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
             in: .page
         ) { [weak self] result in
             guard let self = self else { return }
-            
             switch result {
             case .success(let value):
                 guard let answerStr = value as? String, !answerStr.isEmpty else {
                     self.fail("handleOffer returned empty or invalid result: \(String(describing: value))")
                     return
                 }
-                
-                // Verify it's valid JSON
-                guard let data = answerStr.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let sdp = json["sdp"] as? String,
-                      let type = json["type"] as? String,
-                      type == "answer",
-                      !sdp.isEmpty else {
-                    self.fail("Answer is not valid SDP JSON")
-                    return
+                self.webViewB.callAsyncJavaScript(
+                    "return getIceQueueStats()",
+                    arguments: [:],
+                    in: nil,
+                    in: .page
+                ) { [weak self] statsResult in
+                    guard let self = self else { return }
+                    switch statsResult {
+                    case .success(let statsValue):
+                        guard let stats = Self.dictionary(statsValue),
+                              let pending = Self.intValue(stats["pending"]),
+                              let applied = Self.intValue(stats["applied"]) else {
+                            self.fail("getIceQueueStats after offer returned unexpected value: \(String(describing: statsValue))")
+                            return
+                        }
+                        guard pending == 0, applied >= 1 else {
+                            self.fail("Queued candidate should be applied after offer (pending=\(pending), applied=\(applied))")
+                            return
+                        }
+                        print("✓ Queued candidate applied after offer (pending=0, applied=\(applied))\n")
+                        print("✅ ICE candidate-before-offer test passed\n")
+                        self.runOfferAnswerTest(existingOffer: offer, existingAnswer: answerStr)
+                    case .failure(let error):
+                        self.fail("getIceQueueStats after offer failed: \(error)")
+                    }
                 }
-                
-                print("✓ Peer B created answer:")
-                print("  Type: \(type)")
-                print("  SDP length: \(sdp.count) characters\n")
-                
-                self.handleAnswer(answerStr)
-                
             case .failure(let error):
                 self.fail("Failed to handle offer: \(error)")
             }
         }
+    }
+    
+    func runOfferAnswerTest(existingOffer: String, existingAnswer: String) {
+        print("📝 Test: Offer/Answer SDP flow through JavaScript bridge")
+        print("=========================================================\n")
+        
+        guard let data = existingOffer.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let sdp = json["sdp"] as? String,
+              let type = json["type"] as? String,
+              type == "offer",
+              !sdp.isEmpty else {
+            fail("Offer is not valid SDP JSON")
+            return
+        }
+        
+        print("✓ Peer A created offer:")
+        print("  Type: \(type)")
+        print("  SDP length: \(sdp.count) characters\n")
+        
+        guard let answerData = existingAnswer.data(using: .utf8),
+              let answerJSON = try? JSONSerialization.jsonObject(with: answerData) as? [String: Any],
+              let answerSDP = answerJSON["sdp"] as? String,
+              let answerType = answerJSON["type"] as? String,
+              answerType == "answer",
+              !answerSDP.isEmpty else {
+            fail("Answer is not valid SDP JSON")
+            return
+        }
+        
+        print("✓ Peer B created answer:")
+        print("  Type: \(answerType)")
+        print("  SDP length: \(answerSDP.count) characters\n")
+        
+        handleAnswer(existingAnswer)
     }
     
     func handleAnswer(_ answer: String) {
@@ -210,6 +284,27 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
     func fail(_ message: String) {
         print("\n❌ WebKit bridge test failed: \(message)")
         exit(1)
+    }
+    
+    static func intValue(_ any: Any?) -> Int? {
+        if let i = any as? Int { return i }
+        if let n = any as? NSNumber { return n.intValue }
+        if let d = any as? Double { return Int(d) }
+        return nil
+    }
+    
+    static func dictionary(_ any: Any?) -> [String: Any]? {
+        if let d = any as? [String: Any] { return d }
+        if let d = any as? NSDictionary {
+            var result: [String: Any] = [:]
+            for (key, value) in d {
+                if let key = key as? String {
+                    result[key] = value
+                }
+            }
+            return result
+        }
+        return nil
     }
 }
 
