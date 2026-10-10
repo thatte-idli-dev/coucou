@@ -10,6 +10,13 @@ extension NSNotification.Name {
     static let walkieTap = NSNotification.Name("walkieTap")
     static let triggerEmote = NSNotification.Name("triggerEmote")
     static let botGreet = NSNotification.Name("botGreet")
+    static let hookReveal = NSNotification.Name("hookReveal")
+}
+
+@MainActor
+final class WalkieIslandState {
+    static let shared = WalkieIslandState()
+    func apply(_ state: WalkieState) {}
 }
 
 enum BotEmote: String {

@@ -92,6 +92,9 @@ jobs:
       - name: Walkie-talkie protocol state parsing test
         run: bash scripts/test-walkie-protocol-state.sh
 
+      - name: Walkie-talkie level message tests
+        run: bash scripts/test-walkie-levels.sh
+
       - name: Walkie-talkie WebKit bridge test
         timeout-minutes: 3
         run: bash scripts/test-webkit-bridge.sh

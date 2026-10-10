@@ -7,13 +7,16 @@ import os.log
 private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "Walkie")
 
 @MainActor
-final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKScriptMessageHandler {
+final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     static let shared = WalkieTalkieAudioImpl()
     
     private var window: NSWindow?
     private var webView: WKWebView?
     private var onIceCandidate: (@MainActor (String) -> Void)?
     private var onAnswer: (@MainActor (String) -> Void)?
+    private var isPageReady = false
+    private var pageReadyWaiters: [CheckedContinuation<Void, Never>] = []
+    private var lastLevelAt: Date?
     
     private override init() {
         super.init()
@@ -75,6 +78,8 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
         wv.uiDelegate = self
+        wv.navigationDelegate = self
+        isPageReady = false
         
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
@@ -99,105 +104,165 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
     }
     
     func setMicEnabled(_ enabled: Bool) {
-        guard let wv = webView else { return }
         Task {
             do {
-                _ = try await wv.callAsyncJavaScript("setMicEnabled(enabled)", arguments: ["enabled": enabled], contentWorld: .page)
+                _ = try await callPageJS("setMicEnabled(enabled);", arguments: ["enabled": enabled])
             } catch {
-                logger.error("setMicEnabled failed: \(error.localizedDescription, privacy: .public)")
+                if case WalkieError.notInitialized = error { return }
+                logger.error("setMicEnabled failed: \(jsErrorDescription(error), privacy: .public)")
             }
         }
     }
     
     func setOffer(_ offer: String, iceServers: [[String: Any]]) async throws -> String {
-        guard let wv = webView else { throw WalkieError.notInitialized }
-        
         do {
-            let result = try await wv.callAsyncJavaScript(
+            let result = try await callPageJS(
                 "return await handleOffer(offerJSON, iceServers)",
-                arguments: ["offerJSON": offer, "iceServers": iceServers],
-                contentWorld: .page
+                arguments: ["offerJSON": offer, "iceServers": iceServers]
             )
-            
             guard let answer = result as? String else {
                 throw WalkieError.invalidAnswer
             }
             return answer
         } catch {
-            logger.error("handleOffer failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("handleOffer failed: \(jsErrorDescription(error), privacy: .public)")
             throw error
         }
     }
     
     func createOffer(iceServers: [[String: Any]]) async throws -> String {
-        guard let wv = webView else { throw WalkieError.notInitialized }
-        
         do {
-            let result = try await wv.callAsyncJavaScript(
+            let result = try await callPageJS(
                 "return await createOffer(iceServers)",
-                arguments: ["iceServers": iceServers],
-                contentWorld: .page
+                arguments: ["iceServers": iceServers]
             )
-            
             guard let offer = result as? String else {
                 throw WalkieError.invalidOffer
             }
             return offer
         } catch {
-            logger.error("createOffer failed: \(error.localizedDescription, privacy: .public)")
+            logger.error("createOffer failed: \(jsErrorDescription(error), privacy: .public)")
             throw error
         }
     }
     
     func handleAnswer(_ answer: String) {
-        guard let wv = webView else { return }
         Task {
             do {
-                _ = try await wv.callAsyncJavaScript(
+                _ = try await callPageJS(
                     "handleAnswer(answerJSON)",
-                    arguments: ["answerJSON": answer],
-                    contentWorld: .page
+                    arguments: ["answerJSON": answer]
                 )
             } catch {
-                logger.error("handleAnswer failed: \(error.localizedDescription, privacy: .public)")
+                if case WalkieError.notInitialized = error { return }
+                logger.error("handleAnswer failed: \(jsErrorDescription(error), privacy: .public)")
             }
         }
     }
     
     func addIceCandidate(_ candidate: String) {
-        guard let wv = webView else { return }
         Task {
             do {
-                _ = try await wv.callAsyncJavaScript(
+                _ = try await callPageJS(
                     "addIceCandidate(candidateJSON)",
-                    arguments: ["candidateJSON": candidate],
-                    contentWorld: .page
+                    arguments: ["candidateJSON": candidate]
                 )
             } catch {
-                logger.error("addIceCandidate failed: \(error.localizedDescription, privacy: .public)")
+                if case WalkieError.notInitialized = error { return }
+                logger.error("addIceCandidate failed: \(jsErrorDescription(error), privacy: .public)")
             }
         }
     }
     
     func cleanup() {
-        guard let wv = webView else { return }
-        Task {
-            do {
-                _ = try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
-            } catch {
-                logger.error("cleanup failed: \(error.localizedDescription, privacy: .public)")
+        let wv = webView
+        isPageReady = false
+        webView = nil
+        finishPageReadyWaiters()
+        lastLevelAt = nil
+        WalkieIslandState.shared.applyLevels(local: 0, remote: 0)
+        
+        if let wv {
+            Task {
+                do {
+                    _ = try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
+                } catch {
+                    logger.error("cleanup failed: \(jsErrorDescription(error), privacy: .public)")
+                }
             }
         }
         
-        webView?.stopLoading()
-        webView?.loadHTMLString("", baseURL: nil)
+        wv?.navigationDelegate = nil
+        wv?.stopLoading()
+        wv?.loadHTMLString("", baseURL: nil)
         window?.orderOut(nil)
-        webView = nil
         window = nil
         onIceCandidate = nil
         onAnswer = nil
     }
+
+    private func callPageJS(_ script: String, arguments: [String: Any] = [:]) async throws -> Any? {
+        await waitUntilPageReady()
+        guard let wv = webView else { throw WalkieError.notInitialized }
+        return try await wv.callAsyncJavaScript(script, arguments: arguments, contentWorld: .page)
+    }
+
+    private func waitUntilPageReady() async {
+        if isPageReady || webView == nil { return }
+        await withCheckedContinuation { continuation in
+            if isPageReady || webView == nil {
+                continuation.resume()
+            } else {
+                pageReadyWaiters.append(continuation)
+            }
+        }
+    }
+
+    private func markPageReady() {
+        isPageReady = true
+        finishPageReadyWaiters()
+    }
+
+    private func finishPageReadyWaiters() {
+        let waiters = pageReadyWaiters
+        pageReadyWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+    }
+
+    private func jsErrorDescription(_ error: Error) -> String {
+        let nsError = error as NSError
+        let jsMessage = nsError.userInfo["WKJavaScriptExceptionMessage"] as? String
+        if let jsMessage, !jsMessage.isEmpty {
+            return "\(nsError.localizedDescription): \(jsMessage)"
+        }
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+           let jsMessage = underlying.userInfo["WKJavaScriptExceptionMessage"] as? String,
+           !jsMessage.isEmpty {
+            return "\(nsError.localizedDescription): \(jsMessage)"
+        }
+        return nsError.localizedDescription
+    }
     
+    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        Task { @MainActor in
+            self.markPageReady()
+        }
+    }
+
+    nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        Task { @MainActor in
+            logger.error("Walkie page load failed: \(self.jsErrorDescription(error), privacy: .public)")
+            self.markPageReady()
+        }
+    }
+
+    nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        Task { @MainActor in
+            logger.error("Walkie page provisional load failed: \(self.jsErrorDescription(error), privacy: .public)")
+            self.markPageReady()
+        }
+    }
+
     nonisolated func webView(
         _ webView: WKWebView,
         requestMediaCapturePermissionFor origin: WKSecurityOrigin,
@@ -221,6 +286,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         let iceState = dict["state"] as? String
         let candidateType = dict["candidateType"] as? String
         let connectionState = dict["state"] as? String
+        let levels = WalkieLevels.parse(dict)
         Task { @MainActor in
             self.handleMessage(
                 type: type,
@@ -229,7 +295,8 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
                 errorMessage: errorMessage,
                 iceState: iceState,
                 candidateType: candidateType,
-                connectionState: connectionState
+                connectionState: connectionState,
+                levels: levels
             )
         }
     }
@@ -246,7 +313,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         return true
     }
 
-    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?, iceState: String?, candidateType: String?, connectionState: String?) {
+    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?, iceState: String?, candidateType: String?, connectionState: String?, levels: (local: Double, remote: Double)?) {
         switch type {
         case "ice":
             if let candidate = candidate {
@@ -276,6 +343,11 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             if let candidateType = candidateType {
                 logger.info("Selected candidate pair type: \(candidateType, privacy: .public)")
             }
+        case "levels":
+            guard let levels,
+                  WalkieLevels.shouldAccept(now: Date(), last: lastLevelAt) else { return }
+            lastLevelAt = Date()
+            WalkieIslandState.shared.applyLevels(local: levels.local, remote: levels.remote)
         default:
             break
         }

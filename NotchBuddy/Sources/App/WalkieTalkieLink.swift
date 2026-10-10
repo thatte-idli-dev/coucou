@@ -42,6 +42,7 @@ final class WalkieTalkieLink {
         didSet {
             if self.state != oldValue {
                 logger.info("State: \(String(describing: oldValue), privacy: .public) → \(String(describing: self.state), privacy: .public)")
+                publishIsland()
             }
         }
     }
@@ -135,6 +136,16 @@ final class WalkieTalkieLink {
     
     var currentState: WalkieState {
         state
+    }
+
+    private func publishIsland() {
+        WalkieIslandState.shared.apply(state)
+        switch state {
+        case .waiting, .inCall:
+            NotificationCenter.default.post(name: .hookReveal, object: nil)
+        default:
+            break
+        }
     }
     
     var isAssignedSeatA: Bool {

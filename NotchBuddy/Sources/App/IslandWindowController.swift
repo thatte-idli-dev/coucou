@@ -275,7 +275,9 @@ final class IslandWindowController: NSWindowController {
             self?.fsm.greetComplete()
         }
 
-        fsm.isHeldOpen = { AppState.shared.pendingApproval != nil }
+        fsm.isHeldOpen = {
+            AppState.shared.pendingApproval != nil || WalkieIslandState.shared.holdsIsland
+        }
     }
 
     // MARK: - Polling loop

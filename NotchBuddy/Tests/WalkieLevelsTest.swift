@@ -1,0 +1,63 @@
+import Foundation
+
+@main
+enum WalkieLevelsTest {
+    static func main() {
+        testParseValid()
+        testParseNSNumber()
+        testParseMissing()
+        testParseClamps()
+        testThrottle()
+        print("WalkieLevels: all cases passed")
+    }
+
+    static func testParseValid() {
+        guard let parsed = WalkieLevels.parse(["local": 0.4, "remote": 0.8]) else {
+            preconditionFailure("expected parse of Doubles")
+        }
+        precondition(abs(parsed.local - 0.4) < 0.000_1, "local")
+        precondition(abs(parsed.remote - 0.8) < 0.000_1, "remote")
+    }
+
+    static func testParseNSNumber() {
+        guard let parsed = WalkieLevels.parse([
+            "local": NSNumber(value: 0.25),
+            "remote": NSNumber(value: 1)
+        ]) else {
+            preconditionFailure("expected parse of NSNumber")
+        }
+        precondition(abs(parsed.local - 0.25) < 0.000_1, "local NSNumber")
+        precondition(abs(parsed.remote - 1) < 0.000_1, "remote NSNumber")
+    }
+
+    static func testParseMissing() {
+        precondition(WalkieLevels.parse(["local": 0.5]) == nil, "missing remote")
+        precondition(WalkieLevels.parse(["type": "levels"]) == nil, "missing both")
+        precondition(WalkieLevels.parse(["local": "loud", "remote": 0.1]) == nil, "wrong type")
+    }
+
+    static func testParseClamps() {
+        guard let parsed = WalkieLevels.parse(["local": 1.7, "remote": -0.2]) else {
+            preconditionFailure("expected clamp parse")
+        }
+        precondition(parsed.local == 1, "local clamp")
+        precondition(parsed.remote == 0, "remote clamp")
+    }
+
+    static func testThrottle() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        precondition(WalkieLevels.shouldAccept(now: start, last: nil), "first sample")
+        precondition(
+            !WalkieLevels.shouldAccept(now: start.addingTimeInterval(1.0 / 30.0), last: start),
+            "faster than 15 Hz must drop"
+        )
+        precondition(
+            WalkieLevels.shouldAccept(now: start.addingTimeInterval(1.0 / 15.0), last: start),
+            "15 Hz boundary accepted"
+        )
+        precondition(
+            WalkieLevels.shouldAccept(now: start.addingTimeInterval(0.2), last: start),
+            "slower than 15 Hz accepted"
+        )
+    }
+}

@@ -175,3 +175,28 @@ enum WalkieProtocol {
         )
     }
 }
+
+/// Parse and throttle walkie analyser level messages (~15 Hz).
+enum WalkieLevels {
+    static let minInterval: TimeInterval = 1.0 / 15.0
+
+    static func parse(_ dict: [String: Any]) -> (local: Double, remote: Double)? {
+        func number(_ key: String) -> Double? {
+            if let value = dict[key] as? Double { return value }
+            if let value = dict[key] as? Int { return Double(value) }
+            if let value = dict[key] as? NSNumber { return value.doubleValue }
+            return nil
+        }
+        guard let local = number("local"), let remote = number("remote") else { return nil }
+        return (clamp01(local), clamp01(remote))
+    }
+
+    static func shouldAccept(now: Date, last: Date?, minInterval: TimeInterval = minInterval) -> Bool {
+        guard let last else { return true }
+        return now.timeIntervalSince(last) + 0.000_5 >= minInterval
+    }
+
+    private static func clamp01(_ value: Double) -> Double {
+        min(1, max(0, value))
+    }
+}
