@@ -442,17 +442,17 @@ struct TestError: Error, CustomStringConvertible {
 
 extension WalkieTalkieLink {
     func simulatePTTDown() async {
-        NotificationCenter.default.post(name: .walkiePTTDown, object: nil)
+        NotificationCenter.default.post(name: .walkiePTTDown, object: self)
         try? await Task.sleep(for: .milliseconds(50))
     }
     
     func simulatePTTUp() async {
-        NotificationCenter.default.post(name: .walkiePTTUp, object: nil)
+        NotificationCenter.default.post(name: .walkiePTTUp, object: self)
         try? await Task.sleep(for: .milliseconds(50))
     }
     
     func simulateTap() async {
-        NotificationCenter.default.post(name: .walkieTap, object: nil)
+        NotificationCenter.default.post(name: .walkieTap, object: self)
         try? await Task.sleep(for: .milliseconds(50))
     }
 }

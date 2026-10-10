@@ -80,32 +80,45 @@ final class WalkieTalkieLink: @unchecked Sendable {
             forName: .walkiePTTDown,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { await self?.handlePTTDown() }
+        ) { [weak self] notification in
+            guard let self else { return }
+            // Only respond if notification is broadcast (nil) or targeted to this instance
+            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
+                Task { await self.handlePTTDown() }
+            }
         }
         
         NotificationCenter.default.addObserver(
             forName: .walkiePTTUp,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { await self?.handlePTTUp() }
+        ) { [weak self] notification in
+            guard let self else { return }
+            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
+                Task { await self.handlePTTUp() }
+            }
         }
         
         NotificationCenter.default.addObserver(
             forName: .walkieDoubleTap,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { await self?.handleDoubleTap() }
+        ) { [weak self] notification in
+            guard let self else { return }
+            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
+                Task { await self.handleDoubleTap() }
+            }
         }
         
         NotificationCenter.default.addObserver(
             forName: .walkieTap,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { await self?.handleTap() }
+        ) { [weak self] notification in
+            guard let self else { return }
+            if notification.object == nil || (notification.object as? WalkieTalkieLink) === self {
+                Task { await self.handleTap() }
+            }
         }
     }
     
