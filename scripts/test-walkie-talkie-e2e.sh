@@ -105,7 +105,7 @@ cd "$PROJECT_ROOT"
 TEST_BUILD_DIR=$(mktemp -d)
 trap "rm -rf $TEST_BUILD_DIR; kill $SERVER_PID 2>/dev/null || true; wait $SERVER_PID 2>/dev/null || true" EXIT
 
-# Compile the test with all required files
+# Compile the test with all required files (including REAL WalkieTalkieLink.swift)
 swiftc \
     -o "$TEST_BUILD_DIR/walkie-e2e-test" \
     -sdk "$(xcrun --show-sdk-path --sdk macosx)" \
@@ -113,6 +113,8 @@ swiftc \
     -I "$SOURCE_DIR" \
     "$SOURCE_DIR/WalkieProtocol.swift" \
     "$SOURCE_DIR/WalkieAudioLayer.swift" \
+    "$SOURCE_DIR/WalkieTalkieLink.swift" \
+    "$TEST_DIR/WalkieTalkieTestStubs.swift" \
     "$TEST_DIR/FakeAudioLayer.swift" \
     "$TEST_DIR/WalkieTalkieE2ETest.swift"
 

@@ -169,9 +169,10 @@ final class WalkieTalkieLink: @unchecked Sendable {
                         await handleSSELine(line)
                     }
                     
-                    // Stream ended, reconnect
+                    // Stream ended, reset and reconnect
                     if !Task.isCancelled {
                         logger.warning("SSE stream ended, reconnecting...")
+                        await reconnect()
                         try? await Task.sleep(for: .seconds(reconnectBackoff()))
                     }
                 } catch {
@@ -277,10 +278,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
                         await startWaitingAnimation()
                     }
                 } else {
-                    // Both untuned
-                    if case .waiting = state {
-                        await stopWaitingAnimation()
-                    }
+                    // Both untuned - stop wiggle and reset greet
+                    await stopWaitingAnimation()
+                    hasPlayedGreet = false
                 }
                 
             case "signal":
@@ -441,7 +441,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 let answer = try await audioLayer.setOffer(offerJSON, iceServers: iceServers)
                 await sendAnswer(answer)
                 
-                state = .inCall(mode: .pushToTalk(transmitting: false))
+                let wasWaiting = if case .waiting = state { true } else { false }
+                state = .inCall(mode: .pushToTalk(transmitting: wasWaiting))
                 await stopWaitingAnimation()
                 NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
             } catch {
@@ -833,5 +834,11 @@ final class WalkieTalkieLink: @unchecked Sendable {
         alert.informativeText = "Channel \(channelNumber) is currently full (2 people connected). Please try again later."
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+    
+    // MARK: - Test Support
+    
+    func _setAudioLayer(_ layer: WalkieAudioLayer) {
+        self.audioLayer = layer
     }
 }

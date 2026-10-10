@@ -59,7 +59,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         self.window = win
         self.webView = wv
         
-        wv.loadHTMLString(htmlContent, baseURL: nil)
+        wv.loadHTMLString(htmlContent, baseURL: URL(string: "https://localhost/"))
     }
     
     func setMicEnabled(_ enabled: Bool) {
@@ -78,7 +78,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         
         do {
             let result = try await wv.callAsyncJavaScript(
-                "handleOffer(offerJSON, iceServers)",
+                "return await handleOffer(offerJSON, iceServers)",
                 arguments: ["offerJSON": offer, "iceServers": iceServers],
                 contentWorld: .page
             )
@@ -98,7 +98,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         
         do {
             let result = try await wv.callAsyncJavaScript(
-                "createOffer(iceServers)",
+                "return await createOffer(iceServers)",
                 arguments: ["iceServers": iceServers],
                 contentWorld: .page
             )
@@ -162,12 +162,12 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         onAnswer = nil
     }
     
-    nonisolated func webView(
+    func webView(
         _ webView: WKWebView,
         requestMediaCapturePermissionFor origin: WKSecurityOrigin,
         initiatedByFrame frame: WKFrameInfo,
         type: WKMediaCaptureType,
-        decisionHandler: @escaping (WKPermissionDecision) -> Void
+        decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
     ) {
         decisionHandler(.grant)
     }
@@ -178,13 +178,14 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         
         let candidate = dict["candidate"] as? String
         let answer = dict["answer"] as? String
+        let errorMessage = dict["message"] as? String
         
         Task { @MainActor in
-            self.handleMessage(type: type, candidate: candidate, answer: answer)
+            self.handleMessage(type: type, candidate: candidate, answer: answer, errorMessage: errorMessage)
         }
     }
     
-    private func handleMessage(type: String, candidate: String?, answer: String?) {
+    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?) {
         switch type {
         case "ice":
             if let candidate = candidate {
@@ -193,6 +194,10 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         case "answer":
             if let answer = answer {
                 self.onAnswer?(answer)
+            }
+        case "error":
+            if let errorMessage = errorMessage {
+                logger.error("WebRTC error: \(errorMessage)")
             }
         default:
             break
@@ -210,15 +215,21 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         let pc = null;
         let stream = null;
         let audioTrack = null;
+        let wantMic = false;
         const remoteAudio = document.getElementById('remoteAudio');
         
+        if (!navigator.mediaDevices) {
+            window.webkit.messageHandlers.native.postMessage({
+                type: 'error',
+                message: 'navigator.mediaDevices is undefined (secure context required)'
+            });
+        }
+        
         async function createOffer(iceServers) {
-            const micEnabled = audioTrack ? audioTrack.enabled : false;
-            
             if (!stream) {
                 stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
                 audioTrack = stream.getAudioTracks()[0];
-                audioTrack.enabled = micEnabled;
+                audioTrack.enabled = wantMic;
             }
             
             pc = new RTCPeerConnection({iceServers: iceServers});
@@ -246,12 +257,10 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         }
         
         async function handleOffer(offerJSON, iceServers) {
-            const micEnabled = audioTrack ? audioTrack.enabled : false;
-            
             if (!stream) {
                 stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
                 audioTrack = stream.getAudioTracks()[0];
-                audioTrack.enabled = micEnabled;
+                audioTrack.enabled = wantMic;
             }
             
             pc = new RTCPeerConnection({iceServers: iceServers});
@@ -293,6 +302,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         }
         
         function setMicEnabled(enabled) {
+            wantMic = enabled;
             if (audioTrack) {
                 audioTrack.enabled = enabled;
             }
