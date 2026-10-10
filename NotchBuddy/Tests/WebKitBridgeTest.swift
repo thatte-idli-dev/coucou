@@ -72,8 +72,8 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         delegateB = NavigationDelegate()
         webViewB.navigationDelegate = delegateB
         
-        // Load PRODUCTION HTML from WalkieTalkieAudioImpl
-        let html = WalkieTalkieAudioImpl.pageHTML
+        // Load PRODUCTION HTML from shared constant
+        let html = walkieTalkieHTML
         webViewA.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
         webViewB.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
         

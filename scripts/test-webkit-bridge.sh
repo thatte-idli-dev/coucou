@@ -21,10 +21,8 @@ swiftc \
     -target arm64-apple-macosx13.0 \
     -framework WebKit \
     -framework AppKit \
-    -framework AVFoundation \
     -I "$PROJECT_ROOT/NotchBuddy/Sources/App" \
-    "$PROJECT_ROOT/NotchBuddy/Sources/App/WalkieAudioLayer.swift" \
-    "$PROJECT_ROOT/NotchBuddy/Sources/App/WalkieTalkieAudio.swift" \
+    "$PROJECT_ROOT/NotchBuddy/Sources/App/WalkieTalkieHTML.swift" \
     "$TEST_DIR/WebKitBridgeTest.swift"
 
 if [ $? -ne 0 ]; then
