@@ -45,11 +45,13 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var currentSSEEvent: String?
     private var hasPlayedGreet: Bool = false
     
-    private var audioLayer: WalkieAudioLayer = WalkieTalkieAudio.shared
+    private var audioLayer: WalkieAudioLayer
     
     var waitingTimeout: TimeInterval = 30  // Injectable for tests
     
     private init() {
+        self.audioLayer = WalkieTalkieAudio.shared
+        
         NotificationCenter.default.addObserver(
             forName: .walkiePTTDown,
             object: nil,

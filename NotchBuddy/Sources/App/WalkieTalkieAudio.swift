@@ -6,7 +6,8 @@ import os.log
 
 private let logger = Logger(subsystem: "fr.louisraille.NotchBuddy", category: "WalkieTalkieAudio")
 
-actor WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKScriptMessageHandler {
+@MainActor
+final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKScriptMessageHandler {
     static let shared = WalkieTalkieAudioImpl()
     
     private var window: NSWindow?

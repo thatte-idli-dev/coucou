@@ -1,7 +1,8 @@
 import Foundation
 
 /// Fake audio layer for testing walkie-talkie without WebView
-actor FakeAudioLayer: WalkieAudioLayer {
+@MainActor
+final class FakeAudioLayer: WalkieAudioLayer {
     var onIceCandidate: ((String) -> Void)?
     var onAnswer: ((String) -> Void)?
     var micEnabled: Bool = false

@@ -2,7 +2,8 @@ import Foundation
 
 /// Audio layer protocol for walkie-talkie WebRTC functionality.
 /// Allows injection of fake implementations for testing.
-protocol WalkieAudioLayer: Actor {
+@MainActor
+protocol WalkieAudioLayer {
     func checkMicPermission() async -> Bool
     func setupWebView(onIceCandidate: @escaping (String) -> Void, onAnswer: @escaping (String) -> Void)
     func setMicEnabled(_ enabled: Bool)
