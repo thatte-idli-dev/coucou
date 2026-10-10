@@ -174,6 +174,19 @@ enum WalkieProtocol {
             refreshAfter: refreshAfter
         )
     }
+
+    /// 409 channel_full backoff: 2, 4, 8, then cap at 15 seconds.
+    static func channelFullBackoff(
+        attempt: Int,
+        steps: [TimeInterval] = [2, 4, 8],
+        cap: TimeInterval = 15
+    ) -> TimeInterval {
+        guard attempt > 0 else { return steps.first ?? cap }
+        if attempt <= steps.count {
+            return steps[attempt - 1]
+        }
+        return cap
+    }
 }
 
 /// Parse and throttle walkie analyser level messages (~15 Hz).

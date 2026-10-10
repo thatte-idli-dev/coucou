@@ -99,7 +99,8 @@ struct SettingsView: View {
     @State private var n8nUrl: String       = KeychainStore.shared.get("n8n-url")         ?? ""
     @State private var n8nKey: String       = KeychainStore.shared.get("n8n-api-key")     ?? ""
     
-    @State private var walkieServerURL: String = Keychain.load(key: "walkie-server-url") ?? ""
+    @State private var walkieServerURL: String = Keychain.load(key: "walkie-server-url")
+        ?? UserDefaults.standard.string(forKey: "walkie-server-url") ?? ""
     @State private var walkieAccessCode: String = Keychain.load(key: "walkie-access-code") ?? ""
     @State private var vercelToken: String  = KeychainStore.shared.get("vercel-token")    ?? ""
     @State private var githubToken: String  = KeychainStore.shared.get("github-token")    ?? ""
@@ -1744,8 +1745,9 @@ struct SettingsView: View {
     }
     
     private func saveWalkieSettings() {
-        Keychain.save(key: "walkie-server-url", value: walkieServerURL)
-        Keychain.save(key: "walkie-access-code", value: walkieAccessCode)
+        Keychain.saveWalkie(key: "walkie-server-url", value: walkieServerURL)
+        Keychain.saveWalkie(key: "walkie-access-code", value: walkieAccessCode)
+        UserDefaults.standard.set(walkieServerURL, forKey: "walkie-server-url")
         Task {
             await WalkieTalkieLink.shared.configure(
                 serverURL: walkieServerURL.isEmpty ? nil : walkieServerURL,

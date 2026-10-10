@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var demoMenuItem: NSMenuItem?
 
     func applicationWillTerminate(_ notification: Notification) {
+        WalkieTalkieLink.shared.shutdown()
         DemoEngine.shared.stop()
         HotKeyCenter.shared.unregisterAll()
     }
@@ -246,24 +247,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #endif
         
         Task {
-            let serverURL = Keychain.load(key: "walkie-server-url")
-            let accessCode = Keychain.load(key: "walkie-access-code")
-            if serverURL == nil {
-                walkieLogger.info("Keychain load failed: walkie-server-url missing")
-            } else if serverURL?.isEmpty == true {
-                walkieLogger.info("Keychain load failed: walkie-server-url empty")
-            } else {
-                walkieLogger.info("Keychain load: walkie-server-url present")
+            let urlOutcome = Keychain.loadOutcome(key: "walkie-server-url")
+            let codeOutcome = Keychain.loadOutcome(key: "walkie-access-code")
+            logWalkieKeychainLoad(key: "walkie-server-url", outcome: urlOutcome)
+            logWalkieKeychainLoad(key: "walkie-access-code", outcome: codeOutcome)
+            var serverURL: String?
+            if case .value(let value) = urlOutcome { serverURL = value }
+            if serverURL == nil || serverURL?.isEmpty == true {
+                if let fallback = UserDefaults.standard.string(forKey: "walkie-server-url"), !fallback.isEmpty {
+                    walkieLogger.info("Keychain load: walkie-server-url falling back to UserDefaults")
+                    serverURL = fallback
+                }
             }
-            if accessCode == nil {
-                walkieLogger.info("Keychain load failed: walkie-access-code missing")
-            } else if accessCode?.isEmpty == true {
-                walkieLogger.info("Keychain load failed: walkie-access-code empty")
-            } else {
-                walkieLogger.info("Keychain load: walkie-access-code present")
-            }
+            var accessCode: String?
+            if case .value(let value) = codeOutcome { accessCode = value }
             await WalkieTalkieLink.shared.configure(serverURL: serverURL, accessCode: accessCode)
         }
+    }
+}
+
+private func logWalkieKeychainLoad(key: String, outcome: Keychain.LoadOutcome) {
+    switch outcome {
+    case .value:
+        walkieLogger.info("Keychain load: \(key, privacy: .public) present")
+    case .missing:
+        walkieLogger.info("Keychain load failed: \(key, privacy: .public) missing")
+    case .empty:
+        walkieLogger.info("Keychain load failed: \(key, privacy: .public) empty")
+    case .inaccessible(let status):
+        walkieLogger.error("Keychain load failed: \(key, privacy: .public) item exists but is inaccessible (status=\(status, privacy: .public)). Re-save the access code in Settings after an ad-hoc rebuild.")
     }
 }
 

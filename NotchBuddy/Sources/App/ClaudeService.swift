@@ -6,7 +6,39 @@ import Security
 enum Keychain {
     static let service = "fr.louisraille.NotchBuddy"
 
+    enum LoadOutcome: Equatable {
+        case value(String)
+        case missing
+        case empty
+        case inaccessible(status: OSStatus)
+    }
+
     static func save(key: String, value: String) {
+        save(
+            key: key,
+            value: value,
+            accessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            useDataProtectionKeychain: false
+        )
+    }
+
+    /// Walkie items must survive ad-hoc re-signing: AfterFirstUnlock, data-protection
+    /// keychain, no app-specific ACL. The access code is never written to UserDefaults.
+    static func saveWalkie(key: String, value: String) {
+        save(
+            key: key,
+            value: value,
+            accessible: kSecAttrAccessibleAfterFirstUnlock,
+            useDataProtectionKeychain: true
+        )
+    }
+
+    static func save(
+        key: String,
+        value: String,
+        accessible: CFString,
+        useDataProtectionKeychain: Bool
+    ) {
         guard let data = value.data(using: .utf8) else { return }
         // Delete existing item first (update pattern)
         let lookup: [String: Any] = [
@@ -15,21 +47,26 @@ enum Keychain {
             kSecAttrAccount as String: key,
         ]
         SecItemDelete(lookup as CFDictionary)
-        // Add with strictest access control:
-        // WhenUnlockedThisDeviceOnly = accessible only while Mac is unlocked,
-        // never synced to iCloud, never migrated to another device.
-        let item: [String: Any] = [
+        var item: [String: Any] = [
             kSecClass as String:            kSecClassGenericPassword,
             kSecAttrService as String:      service,
             kSecAttrAccount as String:      key,
             kSecValueData as String:        data,
-            kSecAttrAccessible as String:   kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            kSecAttrAccessible as String:   accessible,
             kSecAttrSynchronizable as String: kCFBooleanFalse!,
         ]
+        if useDataProtectionKeychain {
+            item[kSecUseDataProtectionKeychain as String] = kCFBooleanTrue!
+        }
         SecItemAdd(item as CFDictionary, nil)
     }
 
     static func load(key: String) -> String? {
+        if case .value(let value) = loadOutcome(key: key) { return value }
+        return nil
+    }
+
+    static func loadOutcome(key: String) -> LoadOutcome {
         let query: [String: Any] = [
             kSecClass as String:       kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -38,9 +75,28 @@ enum Keychain {
             kSecMatchLimit as String:  kSecMatchLimitOne,
         ]
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess {
+            guard let data = result as? Data else { return .empty }
+            let value = String(data: data, encoding: .utf8) ?? ""
+            return value.isEmpty ? .empty : .value(value)
+        }
+        if status == errSecItemNotFound {
+            return .missing
+        }
+        let attrs: [String: Any] = [
+            kSecClass as String:            kSecClassGenericPassword,
+            kSecAttrService as String:      service,
+            kSecAttrAccount as String:      key,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String:       kSecMatchLimitOne,
+        ]
+        var attrResult: AnyObject?
+        let attrStatus = SecItemCopyMatching(attrs as CFDictionary, &attrResult)
+        if attrStatus == errSecSuccess || attrStatus == errSecInteractionNotAllowed || attrStatus == errSecAuthFailed {
+            return .inaccessible(status: status)
+        }
+        return status == errSecItemNotFound ? .missing : .inaccessible(status: status)
     }
 
     static func delete(key: String) {

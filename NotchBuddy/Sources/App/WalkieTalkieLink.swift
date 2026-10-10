@@ -70,7 +70,17 @@ final class WalkieTalkieLink {
     private var iceServers: [[String: Any]] = []
     private var serverURL: String?
     private var channelToken: String?
-    private var channelFull: Bool = false
+    private var channelFull: Bool = false {
+        didSet {
+            if self.channelFull != oldValue {
+                logger.info("Channel full: \(self.channelFull, privacy: .public)")
+                publishIsland()
+            }
+        }
+    }
+    private var channelFullAttempts: Int = 0
+    var channelFullRetrySteps: [TimeInterval] = [2, 4, 8]
+    var channelFullRetryCap: TimeInterval = 15
     private var lastEventTime: Date = Date()
     private var reconnectAttempts: Int = 0
     
@@ -138,7 +148,16 @@ final class WalkieTalkieLink {
         state
     }
 
+    var isChannelFull: Bool {
+        channelFull
+    }
+
     private func publishIsland() {
+        if channelFull {
+            WalkieIslandState.shared.applyChannelFull()
+            NotificationCenter.default.post(name: .hookReveal, object: nil)
+            return
+        }
         WalkieIslandState.shared.apply(state)
         switch state {
         case .waiting, .inCall:
@@ -153,17 +172,20 @@ final class WalkieTalkieLink {
     }
     
     func configure(serverURL: String?, accessCode: String?) async {
+        // Leave the current seat before applying a new (or empty) code.
+        await disconnect()
+        
         guard let code = accessCode, !code.isEmpty else {
             logger.info("configure: early return, no access code")
             self.serverURL = nil
             self.channelToken = nil
-            await disconnect()
             return
         }
         
         guard let components = WalkieProtocol.decodeAccessCode(code) else {
             logger.error("configure: early return, access code decode failed")
-            await disconnect()
+            self.serverURL = nil
+            self.channelToken = nil
             return
         }
         
@@ -188,6 +210,7 @@ final class WalkieTalkieLink {
         
         logger.info("connectIfNeeded: connecting to \(serverURL, privacy: .public) channel=\(self.channelNumber, privacy: .public)")
         channelFull = false
+        channelFullAttempts = 0
         state = .connected(tuned: false)
         reconnectAttempts = 0
         
@@ -252,16 +275,21 @@ final class WalkieTalkieLink {
     
     private enum EventStreamDisposition {
         case stop
-        case retry(seconds: Int)
+        case retry(seconds: TimeInterval)
         case proceed
     }
     
     private func consumeEventHTTPStatus(_ status: Int) async -> EventStreamDisposition {
         if status == 409 {
-            logger.error("SSE: Channel full (409)")
+            channelFullAttempts += 1
+            let delay = WalkieProtocol.channelFullBackoff(
+                attempt: channelFullAttempts,
+                steps: channelFullRetrySteps,
+                cap: channelFullRetryCap
+            )
+            logger.error("SSE: Channel full (409), retrying in \(delay, privacy: .public)s")
             channelFull = true
-            await disconnect()
-            return .stop
+            return .retry(seconds: delay)
         }
         if status == 401 {
             logger.error("SSE: Authentication failed (401)")
@@ -270,9 +298,11 @@ final class WalkieTalkieLink {
         }
         guard status == 200 else {
             logger.warning("SSE: HTTP \(status, privacy: .public), will retry")
-            return .retry(seconds: nextReconnectBackoff())
+            return .retry(seconds: TimeInterval(nextReconnectBackoff()))
         }
         logger.info("SSE: Connected (200)")
+        channelFull = false
+        channelFullAttempts = 0
         reconnectAttempts = 0
         lastEventTime = Date()
         return .proceed
@@ -299,9 +329,10 @@ final class WalkieTalkieLink {
         streamHealthTimer = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(35))
-                if Date().timeIntervalSince(lastEventTime) > 35 {
+                if self.channelFull { continue }
+                if Date().timeIntervalSince(self.lastEventTime) > 35 {
                     logger.warning("Stream dead for 35s, reconnecting...")
-                    await reconnect()
+                    await self.reconnect()
                 }
             }
         }
@@ -684,7 +715,6 @@ final class WalkieTalkieLink {
     
     private func handlePTTDown() async {
         if channelFull {
-            showChannelFullAlert()
             return
         }
         
@@ -763,7 +793,6 @@ final class WalkieTalkieLink {
     
     private func handleDoubleTap() async {
         if channelFull {
-            showChannelFullAlert()
             return
         }
         
@@ -967,51 +996,86 @@ final class WalkieTalkieLink {
     }
     
     func disconnect() async {
+        cancelWalkieTasks()
+        await stopWaitingAnimation()
+        audioLayer.cleanup()
+        await leaveSession()
+        resetAfterLeave()
+    }
+
+    /// Cancel SSE and DELETE the session immediately. Safe to call from
+    /// `applicationWillTerminate` (does not hop back onto the main actor).
+    func shutdown() {
+        cancelWalkieTasks()
+        audioLayer.cleanup()
+        leaveSessionBlocking()
+        resetAfterLeave()
+    }
+
+    private func cancelWalkieTasks() {
         eventTask?.cancel()
         presenceTask?.cancel()
         waitingTimer?.cancel()
         iceRefreshTimer?.cancel()
         streamHealthTimer?.cancel()
-        
-        await stopWaitingAnimation()
-        audioLayer.cleanup()
-        
         eventTask = nil
         presenceTask = nil
         waitingTimer = nil
         iceRefreshTimer = nil
         streamHealthTimer = nil
-        
-        if let serverURL, let sessionToken, let sessionID {
-            let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/session"
-            if let url = URL(string: urlStr) {
-                let body = WalkieProtocol.buildLeaveBody(sessionID: sessionID)
-                guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return }
-                
-                var req = URLRequest(url: url)
-                req.httpMethod = "DELETE"
-                req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
-                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                req.httpBody = jsonData
-                
-                do {
-                    let (_, response) = try await URLSession.shared.data(for: req)
-                    if let httpResp = response as? HTTPURLResponse {
-                        // Accept both 200 and 204
-                        guard httpResp.statusCode == 200 || httpResp.statusCode == 204 else { return }
-                    }
-                } catch {}
+    }
+
+    private func makeLeaveRequest() -> URLRequest? {
+        guard let serverURL, let sessionToken, let sessionID else { return nil }
+        let urlStr = "\(serverURL)/v3/channels/\(channelNumber)/session"
+        guard let url = URL(string: urlStr) else { return nil }
+        let body = WalkieProtocol.buildLeaveBody(sessionID: sessionID)
+        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        req.setValue("Bearer \(sessionToken)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = jsonData
+        req.timeoutInterval = 2
+        return req
+    }
+
+    private func leaveSession() async {
+        guard let req = makeLeaveRequest() else { return }
+        logger.info("Leaving session")
+        do {
+            let (_, response) = try await URLSession.shared.data(for: req)
+            if let httpResp = response as? HTTPURLResponse {
+                logger.info("Leave session: HTTP \(httpResp.statusCode, privacy: .public)")
             }
+        } catch {
+            logger.error("Leave session error: \(error.localizedDescription, privacy: .public)")
         }
-        
+    }
+
+    private func leaveSessionBlocking() {
+        guard let req = makeLeaveRequest() else { return }
+        logger.info("Leaving session (blocking)")
+        let semaphore = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { _, response, _ in
+            if let httpResp = response as? HTTPURLResponse {
+                logger.info("Leave session: HTTP \(httpResp.statusCode, privacy: .public)")
+            }
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 2)
+    }
+
+    private func resetAfterLeave() {
         sessionID = nil
         sessionToken = nil
         revision = 0
         negotiationID = nil
         peerTuned = false
         hasPlayedGreet = false
+        channelFull = false
+        channelFullAttempts = 0
         resetTalkIntent()
-        
         state = .disconnected
     }
     
@@ -1029,11 +1093,4 @@ final class WalkieTalkieLink {
         }
     }
     
-    private func showChannelFullAlert() {
-        let alert = NSAlert()
-        alert.messageText = "Channel Full"
-        alert.informativeText = "Channel \(channelNumber) is currently full (2 people connected). Please try again later."
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
 }

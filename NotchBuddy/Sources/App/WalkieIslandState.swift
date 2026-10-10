@@ -4,6 +4,7 @@ import Combine
 enum WalkieIslandPresentation: Equatable {
     case hidden
     case calling
+    case channelFull
     case onCall(mode: OnCallMode)
 
     enum OnCallMode: Equatable {
@@ -37,13 +38,17 @@ final class WalkieIslandState: ObservableObject {
     /// Local level while we transmit; remote level while muted so the friend's voice moves the bars.
     var displayedLevel: Double {
         switch presentation {
-        case .hidden, .calling:
+        case .hidden, .calling, .channelFull:
             return 0
         case .onCall(.muted):
             return remoteLevel
         case .onCall(.talking), .onCall(.handsFree):
             return localLevel
         }
+    }
+
+    func applyChannelFull() {
+        presentation = .channelFull
     }
 
     func apply(_ state: WalkieState) {

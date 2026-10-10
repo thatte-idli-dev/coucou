@@ -10,13 +10,13 @@ struct WalkieCallBadge: View {
         switch presentation {
         case .hidden:
             EmptyView()
-        case .calling:
+        case .calling, .channelFull:
             HStack(spacing: 5) {
                 Circle()
-                    .fill(Color(hex: "#10B981"))
+                    .fill(Color(hex: presentation == .channelFull ? "#F5A524" : "#10B981"))
                     .frame(width: 6, height: 6)
                     .opacity(pulse ? 1 : 0.35)
-                Text("Calling…")
+                Text(presentation == .channelFull ? "Channel full, retrying…" : "Calling…")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(Color(hex: "#F5F6F8"))
                     .fixedSize()

@@ -53,6 +53,12 @@ struct WalkieTalkieE2ETest {
         
         // Test 8: Answerer mic matches CallMode after the offer
         try await testAnswererMicMatchesCallMode(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 9: Third client retries after 409 until a seat frees
+        try await testChannelFullRetry(serverURL: serverURL, accessCode: accessCode)
+        
+        // Test 10: leave-on-quit frees the seat immediately
+        try await testLeaveOnQuitFreesSeat(serverURL: serverURL, accessCode: accessCode)
     }
     
     // MARK: - Test 1: Full Call Flow
@@ -599,6 +605,83 @@ struct WalkieTalkieE2ETest {
         await linkA.disconnect()
         await linkB.disconnect()
         print("✅ Test 8 passed")
+    }
+
+    @MainActor
+    static func testChannelFullRetry(serverURL: String, accessCode: String) async throws {
+        print("\n📞 Test 9: Third client retries after 409 until a seat frees")
+        print("==========================================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let audioC = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        let linkC = WalkieTalkieLink(audioLayer: audioC)
+        linkC.channelFullRetrySteps = [0.05]
+        linkC.channelFullRetryCap = 0.05
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("A and B connected") {
+            linkA.currentState != .disconnected && linkB.currentState != .disconnected
+        }
+        
+        await linkC.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("C sees channel full") {
+            linkC.isChannelFull
+        }
+        
+        await linkA.disconnect()
+        try await waitUntil("C joined after A left") {
+            !linkC.isChannelFull && linkC.currentState != .disconnected
+        }
+        
+        await linkB.disconnect()
+        await linkC.disconnect()
+        print("✅ Test 9 passed")
+    }
+
+    @MainActor
+    static func testLeaveOnQuitFreesSeat(serverURL: String, accessCode: String) async throws {
+        print("\n📞 Test 10: leave-on-quit frees the seat immediately")
+        print("===================================================")
+        
+        let audioA = FakeAudioLayer()
+        let audioB = FakeAudioLayer()
+        let audioC = FakeAudioLayer()
+        let linkA = WalkieTalkieLink(audioLayer: audioA)
+        let linkB = WalkieTalkieLink(audioLayer: audioB)
+        let linkC = WalkieTalkieLink(audioLayer: audioC)
+        linkC.channelFullRetrySteps = [0.05]
+        linkC.channelFullRetryCap = 0.05
+        
+        await linkA.configure(serverURL: serverURL, accessCode: accessCode)
+        await linkB.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("A and B connected") {
+            linkA.currentState != .disconnected && linkB.currentState != .disconnected
+        }
+        
+        linkA.shutdown()
+        await linkC.configure(serverURL: serverURL, accessCode: accessCode)
+        try await waitUntil("C connected after A quit") {
+            !linkC.isChannelFull && linkC.currentState != .disconnected
+        }
+        
+        await linkB.disconnect()
+        await linkC.disconnect()
+        print("✅ Test 10 passed")
+    }
+    
+    @MainActor
+    static func waitUntil(_ label: String, timeoutMS: Int = 4000, _ pred: () -> Bool) async throws {
+        var elapsed = 0
+        while elapsed < timeoutMS {
+            if pred() { return }
+            try await Task.sleep(for: .milliseconds(50))
+            elapsed += 50
+        }
+        throw TestError(label)
     }
     
     @MainActor

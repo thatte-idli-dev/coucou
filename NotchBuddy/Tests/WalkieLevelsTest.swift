@@ -8,6 +8,7 @@ enum WalkieLevelsTest {
         testParseMissing()
         testParseClamps()
         testThrottle()
+        testChannelFullBackoff()
         print("WalkieLevels: all cases passed")
     }
 
@@ -59,5 +60,13 @@ enum WalkieLevelsTest {
             WalkieLevels.shouldAccept(now: start.addingTimeInterval(0.2), last: start),
             "slower than 15 Hz accepted"
         )
+    }
+
+    static func testChannelFullBackoff() {
+        precondition(WalkieProtocol.channelFullBackoff(attempt: 1) == 2, "first 409 is 2s")
+        precondition(WalkieProtocol.channelFullBackoff(attempt: 2) == 4, "second 409 is 4s")
+        precondition(WalkieProtocol.channelFullBackoff(attempt: 3) == 8, "third 409 is 8s")
+        precondition(WalkieProtocol.channelFullBackoff(attempt: 4) == 15, "fourth 409 caps at 15s")
+        precondition(WalkieProtocol.channelFullBackoff(attempt: 10) == 15, "later 409 stays at 15s")
     }
 }

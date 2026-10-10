@@ -17,6 +17,7 @@ extension NSNotification.Name {
 final class WalkieIslandState {
     static let shared = WalkieIslandState()
     func apply(_ state: WalkieState) {}
+    func applyChannelFull() {}
 }
 
 enum BotEmote: String {
