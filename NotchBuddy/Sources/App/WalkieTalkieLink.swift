@@ -46,7 +46,13 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var sessionToken: String?
     private var revision: Int = 0
     private var negotiationID: String?
-    private var isSeatA: Bool = false
+    private var isSeatA: Bool = false {
+        didSet {
+            if isSeatA != oldValue {
+                logger.info("Seat assignment: \(isSeatA ? "A" : "B", privacy: .public) (session: \(sessionID ?? "unknown", privacy: .public))")
+            }
+        }
+    }
     private var peerTuned: Bool = false
     private var lastStateEventPeerTuned: Bool = false
     private var channelNumber: Int = 1
@@ -124,6 +130,10 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     var currentState: WalkieState {
         state
+    }
+    
+    var isAssignedSeatA: Bool {
+        isSeatA
     }
     
     func configure(serverURL: String?, accessCode: String?) async {
@@ -452,7 +462,9 @@ final class WalkieTalkieLink: @unchecked Sendable {
         if isSeatA {
             do {
                 let offer = try await audioLayer.createOffer(iceServers: iceServers)
+                logger.info("Created offer, sending to peer")
                 await sendOffer(offer)
+                logger.info("Offer sent")
             } catch {
                 logger.error("createOffer failed: \(error.localizedDescription, privacy: .public)")
             }
@@ -509,10 +521,13 @@ final class WalkieTalkieLink: @unchecked Sendable {
         }
         
         if let offerJSON, !isSeatA {
+            logger.info("Received offer from peer, processing...")
             do {
                 await fetchICEServers()
                 let answer = try await audioLayer.setOffer(offerJSON, iceServers: iceServers)
+                logger.info("Created answer, sending to peer")
                 await sendAnswer(answer)
+                logger.info("Answer sent")
                 
                 let wasWaiting = if case .waiting = state { true } else { false }
                 state = .inCall(mode: .pushToTalk(transmitting: wasWaiting))
@@ -521,10 +536,16 @@ final class WalkieTalkieLink: @unchecked Sendable {
             } catch {
                 logger.error("handleOffer failed: \(error.localizedDescription, privacy: .public)")
             }
+        } else if let offerJSON, isSeatA {
+            logger.warning("Received offer but I am seat A (offerer), ignoring")
         }
         
         if let answerJSON, isSeatA {
+            logger.info("Received answer from peer, processing...")
             await audioLayer.handleAnswer(answerJSON)
+            logger.info("Answer processed")
+        } else if let answerJSON, !isSeatA {
+            logger.warning("Received answer but I am seat B (answerer), ignoring")
         }
         
         // Accept both wrapped and standard candidate formats

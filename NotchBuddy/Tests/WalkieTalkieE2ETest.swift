@@ -130,22 +130,36 @@ struct WalkieTalkieE2ETest {
         
         print("✓ Both clients in call")
         
-        // Assert bidirectional SDP exchange
-        guard audioB.remoteOffer != nil else {
-            throw TestError("Client B did not receive A's offer")
+        // Determine which client is seat A (offerer) and which is seat B (answerer)
+        let linkAIsSeatA = linkA.isAssignedSeatA
+        let linkBIsSeatA = linkB.isAssignedSeatA
+        
+        print("  linkA is seat \(linkAIsSeatA ? "A" : "B"), linkB is seat \(linkBIsSeatA ? "A" : "B")")
+        
+        // Ensure they have different seats
+        guard linkAIsSeatA != linkBIsSeatA else {
+            throw TestError("Both clients assigned same seat (A: \(linkAIsSeatA), B: \(linkBIsSeatA))")
         }
-        guard audioA.remoteAnswer != nil else {
-            throw TestError("Client A did not receive B's answer")
+        
+        // Assert bidirectional SDP exchange based on actual seat assignments
+        let (offererAudio, answererAudio) = linkAIsSeatA ? (audioA, audioB) : (audioB, audioA)
+        let (offererName, answererName) = linkAIsSeatA ? ("A", "B") : ("B", "A")
+        
+        guard answererAudio.remoteOffer != nil else {
+            throw TestError("Client \(answererName) (answerer) did not receive offer from client \(offererName)")
+        }
+        guard offererAudio.remoteAnswer != nil else {
+            throw TestError("Client \(offererName) (offerer) did not receive answer from client \(answererName)")
         }
         
         print("✓ Bidirectional SDP exchange verified")
         
         // Assert ICE candidates exchanged
-        guard !audioA.receivedIceCandidates.isEmpty else {
-            throw TestError("Client A did not receive ICE candidates")
+        guard !offererAudio.receivedIceCandidates.isEmpty else {
+            throw TestError("Client \(offererName) (offerer) did not receive ICE candidates")
         }
-        guard !audioB.receivedIceCandidates.isEmpty else {
-            throw TestError("Client B did not receive ICE candidates")
+        guard !answererAudio.receivedIceCandidates.isEmpty else {
+            throw TestError("Client \(answererName) (answerer) did not receive ICE candidates")
         }
         
         print("✓ ICE candidates exchanged")
