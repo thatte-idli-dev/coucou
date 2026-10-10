@@ -41,12 +41,16 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         // Create web views
         let configA = WKWebViewConfiguration()
         configA.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        let consoleHandlerA = ConsoleMessageHandler(name: "A")
+        configA.userContentController.add(consoleHandlerA, name: "consoleLog")
         webViewA = WKWebView(frame: .zero, configuration: configA)
         delegateA = NavigationDelegate()
         webViewA.navigationDelegate = delegateA
         
         let configB = WKWebViewConfiguration()
         configB.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        let consoleHandlerB = ConsoleMessageHandler(name: "B")
+        configB.userContentController.add(consoleHandlerB, name: "consoleLog")
         webViewB = WKWebView(frame: .zero, configuration: configB)
         delegateB = NavigationDelegate()
         webViewB.navigationDelegate = delegateB
@@ -199,37 +203,56 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         <body>
         <audio id="remoteAudio" autoplay></audio>
         <script>
+        // Override console.log to send to Swift
+        const originalLog = console.log;
+        const originalError = console.error;
+        const originalWarn = console.warn;
+        console.log = (...args) => {
+            originalLog(...args);
+            window.webkit.messageHandlers.consoleLog.postMessage(args.join(' '));
+        };
+        console.error = (...args) => {
+            originalError(...args);
+            window.webkit.messageHandlers.consoleLog.postMessage('ERROR: ' + args.join(' '));
+        };
+        console.warn = (...args) => {
+            originalWarn(...args);
+            window.webkit.messageHandlers.consoleLog.postMessage('WARN: ' + args.join(' '));
+        };
+        
         let pc = null;
         let stream = null;
         let audioTrack = null;
         let wantMic = false;
         const remoteAudio = document.getElementById('remoteAudio');
         
+        console.log('JavaScript loaded');
+        
         if (!navigator.mediaDevices) {
             console.error('navigator.mediaDevices is undefined (secure context required)');
+        } else {
+            console.log('navigator.mediaDevices is available');
         }
         
         async function createOffer(iceServers) {
-            // For testing, create a fake silent audio track (getUserMedia may fail on CI)
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
-                audioTrack = stream.getAudioTracks()[0];
-            } catch (e) {
-                console.warn('getUserMedia failed, using fake track:', e);
-                // Create silent audio context track for testing
-                const audioContext = new AudioContext();
-                const oscillator = audioContext.createOscillator();
-                const dest = audioContext.createMediaStreamDestination();
-                oscillator.connect(dest);
-                stream = dest.stream;
-                audioTrack = stream.getAudioTracks()[0];
-            }
+            // Create silent audio context track (avoid getUserMedia on CI)
+            console.log('createOffer: Creating fake audio track');
+            const audioContext = new AudioContext();
+            const oscillator = audioContext.createOscillator();
+            const dest = audioContext.createMediaStreamDestination();
+            oscillator.connect(dest);
+            stream = dest.stream;
+            audioTrack = stream.getAudioTracks()[0];
             audioTrack.enabled = wantMic;
+            console.log('createOffer: Audio track created');
             
+            console.log('createOffer: Creating RTCPeerConnection');
             pc = new RTCPeerConnection({iceServers: iceServers});
+            console.log('createOffer: Adding tracks');
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
             
             pc.ontrack = (e) => {
+                console.log('createOffer: ontrack fired');
                 if (e.streams && e.streams[0]) {
                     remoteAudio.srcObject = e.streams[0];
                     remoteAudio.play().catch(err => console.error('Audio play failed:', err));
@@ -242,30 +265,33 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
                 }
             };
             
+            console.log('createOffer: Creating offer...');
             const offer = await pc.createOffer();
+            console.log('createOffer: Setting local description...');
             await pc.setLocalDescription(offer);
+            console.log('createOffer: Done, returning SDP');
             return JSON.stringify(offer);
         }
         
         async function handleOffer(offerJSON, iceServers) {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
-                audioTrack = stream.getAudioTracks()[0];
-            } catch (e) {
-                console.warn('getUserMedia failed, using fake track:', e);
-                const audioContext = new AudioContext();
-                const oscillator = audioContext.createOscillator();
-                const dest = audioContext.createMediaStreamDestination();
-                oscillator.connect(dest);
-                stream = dest.stream;
-                audioTrack = stream.getAudioTracks()[0];
-            }
+            // Create silent audio context track (avoid getUserMedia on CI)
+            console.log('handleOffer: Creating fake audio track');
+            const audioContext = new AudioContext();
+            const oscillator = audioContext.createOscillator();
+            const dest = audioContext.createMediaStreamDestination();
+            oscillator.connect(dest);
+            stream = dest.stream;
+            audioTrack = stream.getAudioTracks()[0];
             audioTrack.enabled = wantMic;
+            console.log('handleOffer: Audio track created');
             
+            console.log('handleOffer: Creating RTCPeerConnection');
             pc = new RTCPeerConnection({iceServers: iceServers});
+            console.log('handleOffer: Adding tracks');
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
             
             pc.ontrack = (e) => {
+                console.log('handleOffer: ontrack fired');
                 if (e.streams && e.streams[0]) {
                     remoteAudio.srcObject = e.streams[0];
                     remoteAudio.play().catch(err => console.error('Audio play failed:', err));
@@ -278,17 +304,29 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
                 }
             };
             
+            console.log('handleOffer: Parsing offer JSON');
             const offer = JSON.parse(offerJSON);
+            console.log('handleOffer: Setting remote description...');
             await pc.setRemoteDescription(offer);
+            console.log('handleOffer: Creating answer...');
             const answer = await pc.createAnswer();
+            console.log('handleOffer: Setting local description...');
             await pc.setLocalDescription(answer);
+            console.log('handleOffer: Done, returning answer');
             return JSON.stringify(answer);
         }
         
         async function handleAnswer(answerJSON) {
-            if (!pc) return;
+            console.log('handleAnswer: Starting');
+            if (!pc) {
+                console.error('handleAnswer: No peer connection!');
+                return;
+            }
+            console.log('handleAnswer: Parsing answer JSON');
             const answer = JSON.parse(answerJSON);
+            console.log('handleAnswer: Setting remote description...');
             await pc.setRemoteDescription(answer);
+            console.log('handleAnswer: Done');
         }
         
         function setMicEnabled(enabled) {
@@ -317,6 +355,21 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         </body>
         </html>
         """
+    }
+}
+
+@MainActor
+class ConsoleMessageHandler: NSObject, WKScriptMessageHandler {
+    let name: String
+    
+    init(name: String) {
+        self.name = name
+    }
+    
+    nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        Task { @MainActor in
+            print("[WebView \(self.name)] \(message.body)")
+        }
     }
 }
 
