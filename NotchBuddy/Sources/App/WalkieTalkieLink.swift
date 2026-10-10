@@ -37,8 +37,8 @@ final class WalkieTalkieLink: @unchecked Sendable {
     
     private var state: WalkieState = .disconnected {
         didSet {
-            if state != oldValue {
-                logger.info("State: \(String(describing: oldValue), privacy: .public) → \(String(describing: state), privacy: .public)")
+            if self.state != oldValue {
+                logger.info("State: \(String(describing: oldValue), privacy: .public) → \(String(describing: self.state), privacy: .public)")
             }
         }
     }
@@ -166,14 +166,14 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     
                     if let httpResp = response as? HTTPURLResponse {
                         if httpResp.statusCode == 409 {
-                            logger.error("SSE: Channel full (409)", privacy: .public)
+                            logger.error("SSE: Channel full (409)")
                             channelFull = true
                             await disconnect()
                             return
                         }
                         
                         if httpResp.statusCode == 401 {
-                            logger.error("SSE: Authentication failed (401)", privacy: .public)
+                            logger.error("SSE: Authentication failed (401)")
                             await disconnect()
                             return
                         }
@@ -184,7 +184,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
                             continue
                         }
                         
-                        logger.info("SSE: Connected (200)", privacy: .public)
+                        logger.info("SSE: Connected (200)")
                     }
                     
                     reconnectAttempts = 0
@@ -198,7 +198,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     
                     // Stream ended, reset and reconnect
                     if !Task.isCancelled {
-                        logger.warning("SSE stream ended, reconnecting...", privacy: .public)
+                        logger.warning("SSE stream ended, reconnecting...")
                         await reconnect()
                         try? await Task.sleep(for: .seconds(reconnectBackoff()))
                     }
@@ -224,7 +224,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(35))
                 if Date().timeIntervalSince(lastEventTime) > 35 {
-                    logger.warning("Stream dead for 35s, reconnecting...", privacy: .public)
+                    logger.warning("Stream dead for 35s, reconnecting...")
                     await reconnect()
                 }
             }
@@ -232,7 +232,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func reconnect() async {
-        logger.info("Reconnecting...", privacy: .public)
+        logger.info("Reconnecting...")
         
         // Reset state per protocol rules
         let wasConnected = state != .disconnected
@@ -385,7 +385,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             let (_, response) = try await URLSession.shared.data(for: req)
             if let httpResp = response as? HTTPURLResponse {
                 if httpResp.statusCode == 200 {
-                    logger.debug("Presence: HTTP 200", privacy: .public)
+                    logger.debug("Presence: HTTP 200")
                 } else if httpResp.statusCode == 401 || httpResp.statusCode == 409 {
                     logger.error("Presence: HTTP \(httpResp.statusCode, privacy: .public), reconnecting...")
                     await reconnect()
