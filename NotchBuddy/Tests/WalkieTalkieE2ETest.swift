@@ -75,24 +75,36 @@ struct WalkieTalkieE2ETest {
         
         // Client A presses PTT
         await linkA.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(500))
         
-        guard case .waiting = linkA.currentState else {
-            throw TestError("Client A should be waiting")
+        // Wait for state transition (PTT handling is async)
+        var attempts = 0
+        while true {
+            if case .waiting = linkA.currentState {
+                break
+            }
+            if attempts >= 20 {
+                throw TestError("Client A should be waiting (state: \(linkA.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            attempts += 1
         }
         
         print("✓ Client A is waiting")
         
         // Client B presses PTT
         await linkB.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(1500))
         
-        // Both should now be in call
-        guard case .inCall = linkA.currentState else {
-            throw TestError("Client A should be in call")
-        }
-        guard case .inCall = linkB.currentState else {
-            throw TestError("Client B should be in call")
+        // Wait for negotiation and both clients to be in call
+        var callAttempts = 0
+        while true {
+            if case .inCall = linkA.currentState, case .inCall = linkB.currentState {
+                break
+            }
+            if callAttempts >= 30 {
+                throw TestError("Both should be in call (A: \(linkA.currentState), B: \(linkB.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            callAttempts += 1
         }
         
         print("✓ Both clients in call")
@@ -163,23 +175,37 @@ struct WalkieTalkieE2ETest {
         
         // Establish call
         await linkA.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(300))
         await linkB.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(1500))
         
-        guard case .inCall = linkA.currentState, case .inCall = linkB.currentState else {
-            throw TestError("Failed to establish call")
+        // Wait for call establishment
+        var callAttempts = 0
+        while true {
+            if case .inCall = linkA.currentState, case .inCall = linkB.currentState {
+                break
+            }
+            if callAttempts >= 30 {
+                throw TestError("Failed to establish call (A: \(linkA.currentState), B: \(linkB.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            callAttempts += 1
         }
         
         print("✓ Call established")
         
         // Client A taps to hang up
         await linkA.simulateTap()
-        try await Task.sleep(for: .milliseconds(500))
         
-        // Client A should be untuned
-        guard case .connected(tuned: false) = linkA.currentState else {
-            throw TestError("Client A should have hung up")
+        // Wait for hangup
+        var hangupAttempts = 0
+        while true {
+            if case .connected(tuned: false) = linkA.currentState {
+                break
+            }
+            if hangupAttempts >= 10 {
+                throw TestError("Client A should have hung up (state: \(linkA.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            hangupAttempts += 1
         }
         
         print("✓ Client A hung up")
@@ -213,21 +239,34 @@ struct WalkieTalkieE2ETest {
         
         // Client A presses PTT and starts waiting
         await linkA.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(300))
         
-        guard case .waiting = linkA.currentState else {
-            throw TestError("Client A should be waiting")
+        var waitAttempts = 0
+        while true {
+            if case .waiting = linkA.currentState {
+                break
+            }
+            if waitAttempts >= 10 {
+                throw TestError("Client A should be waiting (state: \(linkA.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            waitAttempts += 1
         }
         
         print("✓ Client A is waiting")
         
         // Client A taps to cancel
         await linkA.simulateTap()
-        try await Task.sleep(for: .milliseconds(500))
         
-        // Client A should be untuned
-        guard case .connected(tuned: false) = linkA.currentState else {
-            throw TestError("Client A should have cancelled waiting")
+        var cancelAttempts = 0
+        while true {
+            if case .connected(tuned: false) = linkA.currentState {
+                break
+            }
+            if cancelAttempts >= 10 {
+                throw TestError("Client A should have cancelled (state: \(linkA.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            cancelAttempts += 1
         }
         
         print("✓ Client A cancelled waiting")
@@ -253,10 +292,17 @@ struct WalkieTalkieE2ETest {
         
         // Client A starts waiting
         await linkA.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(300))
         
-        guard case .waiting = linkA.currentState else {
-            throw TestError("Client A should be waiting")
+        var waitAttempts = 0
+        while true {
+            if case .waiting = linkA.currentState {
+                break
+            }
+            if waitAttempts >= 10 {
+                throw TestError("Client A should be waiting (state: \(linkA.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            waitAttempts += 1
         }
         
         print("✓ Client A is waiting")
@@ -296,12 +342,19 @@ struct WalkieTalkieE2ETest {
         
         // Establish call to trigger ICE server fetch
         await linkA.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(300))
         await linkB.simulatePTTDown()
-        try await Task.sleep(for: .milliseconds(1500))
         
-        guard case .inCall = linkA.currentState, case .inCall = linkB.currentState else {
-            throw TestError("Failed to establish call")
+        // Wait for call establishment
+        var callAttempts = 0
+        while true {
+            if case .inCall = linkA.currentState, case .inCall = linkB.currentState {
+                break
+            }
+            if callAttempts >= 30 {
+                throw TestError("Failed to establish call (A: \(linkA.currentState), B: \(linkB.currentState))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            callAttempts += 1
         }
         
         print("✓ Call established")

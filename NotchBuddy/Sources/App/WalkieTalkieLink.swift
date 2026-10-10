@@ -458,7 +458,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         if let wrapped = payload["ice_candidate"] as? String {
             candidateJSON = wrapped
         }
-        else if let candidate = payload["candidate"] as? String {
+        else if payload["candidate"] != nil {
             // Standard format already has all fields
             candidateJSON = try? String(data: JSONSerialization.data(withJSONObject: payload), encoding: .utf8)
         }
