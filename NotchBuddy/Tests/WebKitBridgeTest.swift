@@ -11,6 +11,11 @@ import WebKit
 @MainActor
 @main
 class WebKitBridgeTest: NSObject, NSApplicationDelegate {
+    var webViewA: WKWebView!
+    var webViewB: WKWebView!
+    var delegateA: NavigationDelegate!
+    var delegateB: NavigationDelegate!
+    
     static func main() {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
@@ -28,28 +33,45 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
     }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        Task { @MainActor in
-            do {
-                try await testOfferAnswerFlow()
-                print("\n✅ WebKit bridge test passed!")
-                exit(0)
-            } catch {
-                print("\n❌ WebKit bridge test failed: \(error)")
-                exit(1)
-            }
-        }
-    }
-    
-    func testOfferAnswerFlow() async throws {
         print("\n🧪 WebKit Bridge Test")
         print("=====================\n")
         print("📝 Test: Offer/Answer SDP flow through JavaScript bridge")
         print("=========================================================\n")
         
-        // Create two web views (simulating two peers)
-        let webViewA = await createWebView()
-        let webViewB = await createWebView()
+        // Create web views
+        let configA = WKWebViewConfiguration()
+        configA.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        webViewA = WKWebView(frame: .zero, configuration: configA)
+        delegateA = NavigationDelegate()
+        webViewA.navigationDelegate = delegateA
         
+        let configB = WKWebViewConfiguration()
+        configB.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+        webViewB = WKWebView(frame: .zero, configuration: configB)
+        delegateB = NavigationDelegate()
+        webViewB.navigationDelegate = delegateB
+        
+        // Load HTML
+        let html = makeHTML()
+        webViewA.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
+        webViewB.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
+        
+        // Wait for both to load
+        delegateA.onLoad = { [weak self] in
+            guard let self = self else { return }
+            if self.delegateB.loaded {
+                self.startTest()
+            }
+        }
+        delegateB.onLoad = { [weak self] in
+            guard let self = self else { return }
+            if self.delegateA.loaded {
+                self.startTest()
+            }
+        }
+    }
+    
+    func startTest() {
         print("✓ Web views created and loaded\n")
         
         // Test ICE servers configuration
@@ -60,103 +82,117 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         
         print("🔊 Creating offer from peer A...")
         
-        // Create offer on peer A
-        let offer: String
-        do {
-            let result = try await webViewA.callAsyncJavaScript(
-                "return await createOffer(iceServers)",
-                arguments: ["iceServers": iceServers],
-                contentWorld: .page
-            )
+        // Create offer
+        webViewA.callAsyncJavaScript(
+            "return await createOffer(iceServers)",
+            arguments: ["iceServers": iceServers],
+            in: nil,
+            in: .page
+        ) { [weak self] result in
+            guard let self = self else { return }
             
-            guard let offerStr = result as? String, !offerStr.isEmpty else {
-                throw TestError("createOffer returned empty or invalid result: \(String(describing: result))")
+            switch result {
+            case .success(let value):
+                guard let offerStr = value as? String, !offerStr.isEmpty else {
+                    self.fail("createOffer returned empty or invalid result: \(String(describing: value))")
+                    return
+                }
+                
+                // Verify it's valid JSON
+                guard let data = offerStr.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let sdp = json["sdp"] as? String,
+                      let type = json["type"] as? String,
+                      type == "offer",
+                      !sdp.isEmpty else {
+                    self.fail("Offer is not valid SDP JSON")
+                    return
+                }
+                
+                print("✓ Peer A created offer:")
+                print("  Type: \(type)")
+                print("  SDP length: \(sdp.count) characters\n")
+                
+                self.handleOffer(offerStr, iceServers: iceServers)
+                
+            case .failure(let error):
+                self.fail("Failed to create offer: \(error)")
             }
-            
-            offer = offerStr
-            
-            // Verify it's valid JSON
-            guard let data = offer.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let sdp = json["sdp"] as? String,
-                  let type = json["type"] as? String,
-                  type == "offer",
-                  !sdp.isEmpty else {
-                throw TestError("Offer is not valid SDP JSON")
-            }
-            
-            print("✓ Peer A created offer:")
-            print("  Type: \(type)")
-            print("  SDP length: \(sdp.count) characters\n")
-            
-        } catch {
-            throw TestError("Failed to create offer: \(error)")
         }
-        
-        print("🔊 Handling offer on peer B...")
-        
-        // Handle offer on peer B and get answer
-        let answer: String
-        do {
-            let result = try await webViewB.callAsyncJavaScript(
-                "return await handleOffer(offerJSON, iceServers)",
-                arguments: ["offerJSON": offer, "iceServers": iceServers],
-                contentWorld: .page
-            )
-            
-            guard let answerStr = result as? String, !answerStr.isEmpty else {
-                throw TestError("handleOffer returned empty or invalid result: \(String(describing: result))")
-            }
-            
-            answer = answerStr
-            
-            // Verify it's valid JSON
-            guard let data = answer.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let sdp = json["sdp"] as? String,
-                  let type = json["type"] as? String,
-                  type == "answer",
-                  !sdp.isEmpty else {
-                throw TestError("Answer is not valid SDP JSON")
-            }
-            
-            print("✓ Peer B created answer:")
-            print("  Type: \(type)")
-            print("  SDP length: \(sdp.count) characters\n")
-            
-        } catch {
-            throw TestError("Failed to handle offer: \(error)")
-        }
-        
-        print("🔊 Handling answer on peer A...")
-        
-        // Handle answer on peer A
-        do {
-            _ = try await webViewA.callAsyncJavaScript(
-                "return await handleAnswer(answerJSON)",
-                arguments: ["answerJSON": answer],
-                contentWorld: .page
-            )
-            
-            print("✓ Peer A handled answer\n")
-            
-        } catch {
-            throw TestError("Failed to handle answer: \(error)")
-        }
-        
-        print("✅ Full offer/answer flow completed successfully")
     }
     
-    func createWebView() async -> WKWebView {
-        let config = WKWebViewConfiguration()
-        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
+    func handleOffer(_ offer: String, iceServers: [[String: Any]]) {
+        print("🔊 Handling offer on peer B...")
         
-        let webView = WKWebView(frame: .zero, configuration: config)
-        let delegate = NavigationDelegate()
-        webView.navigationDelegate = delegate
+        webViewB.callAsyncJavaScript(
+            "return await handleOffer(offerJSON, iceServers)",
+            arguments: ["offerJSON": offer, "iceServers": iceServers],
+            in: nil,
+            in: .page
+        ) { [weak self] result in
+            guard let self = self else { return }
+            
+            switch result {
+            case .success(let value):
+                guard let answerStr = value as? String, !answerStr.isEmpty else {
+                    self.fail("handleOffer returned empty or invalid result: \(String(describing: value))")
+                    return
+                }
+                
+                // Verify it's valid JSON
+                guard let data = answerStr.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let sdp = json["sdp"] as? String,
+                      let type = json["type"] as? String,
+                      type == "answer",
+                      !sdp.isEmpty else {
+                    self.fail("Answer is not valid SDP JSON")
+                    return
+                }
+                
+                print("✓ Peer B created answer:")
+                print("  Type: \(type)")
+                print("  SDP length: \(sdp.count) characters\n")
+                
+                self.handleAnswer(answerStr)
+                
+            case .failure(let error):
+                self.fail("Failed to handle offer: \(error)")
+            }
+        }
+    }
+    
+    func handleAnswer(_ answer: String) {
+        print("🔊 Handling answer on peer A...")
         
-        // Use the same HTML as production WalkieTalkieAudio
-        let html = """
+        webViewA.callAsyncJavaScript(
+            "return await handleAnswer(answerJSON)",
+            arguments: ["answerJSON": answer],
+            in: nil,
+            in: .page
+        ) { [weak self] result in
+            guard let self = self else { return }
+            
+            switch result {
+            case .success:
+                print("✓ Peer A handled answer\n")
+                print("✅ Full offer/answer flow completed successfully")
+                print("\n✅ WebKit bridge test passed!")
+                exit(0)
+                
+            case .failure(let error):
+                self.fail("Failed to handle answer: \(error)")
+            }
+        }
+    }
+    
+    func fail(_ message: String) {
+        print("\n❌ WebKit bridge test failed: \(message)")
+        exit(1)
+    }
+    
+    func makeHTML() -> String {
+        return """
         <!DOCTYPE html>
         <html>
         <head><meta charset="utf-8"></head>
@@ -281,53 +317,28 @@ class WebKitBridgeTest: NSObject, NSApplicationDelegate {
         </body>
         </html>
         """
-        
-        // Use https://localhost/ for secure context (required for navigator.mediaDevices)
-        webView.loadHTMLString(html, baseURL: URL(string: "https://localhost/"))
-        
-        // Wait for page to load
-        await delegate.waitForLoad()
-        
-        return webView
     }
 }
 
 @MainActor
 class NavigationDelegate: NSObject, WKNavigationDelegate {
-    private var continuation: CheckedContinuation<Void, Never>?
+    var loaded = false
+    var onLoad: (() -> Void)?
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        continuation?.resume()
-        continuation = nil
+        loaded = true
+        onLoad?()
     }
     
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         print("❌ Navigation failed: \(error)")
-        continuation?.resume()
-        continuation = nil
+        loaded = true
+        onLoad?()
     }
     
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         print("❌ Provisional navigation failed: \(error)")
-        continuation?.resume()
-        continuation = nil
-    }
-    
-    func waitForLoad() async {
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
-    }
-}
-
-struct TestError: Error, CustomStringConvertible {
-    let message: String
-    
-    init(_ message: String) {
-        self.message = message
-    }
-    
-    var description: String {
-        message
+        loaded = true
+        onLoad?()
     }
 }
