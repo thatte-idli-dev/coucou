@@ -9,6 +9,16 @@ let walkieTalkieHTML = """
 <body>
 <audio id="remoteAudio" autoplay></audio>
 <script>
+// Forward console errors to native logger
+const originalConsoleError = console.error;
+console.error = function(...args) {
+    originalConsoleError.apply(console, args);
+    window.webkit.messageHandlers.native.postMessage({
+        type: 'consoleError',
+        message: args.map(a => String(a)).join(' ')
+    });
+};
+
 let pc = null;
 let stream = null;
 let audioTrack = null;
@@ -37,6 +47,13 @@ async function createOffer(iceServers) {
             remoteAudio.srcObject = e.streams[0];
             remoteAudio.play().catch(err => console.error('Audio play failed:', err));
         }
+    };
+    
+    pc.onconnectionstatechange = () => {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'connectionState',
+            state: pc.connectionState
+        });
     };
     
     pc.oniceconnectionstatechange = () => {
@@ -98,6 +115,13 @@ async function handleOffer(offerJSON, iceServers) {
             remoteAudio.srcObject = e.streams[0];
             remoteAudio.play().catch(err => console.error('Audio play failed:', err));
         }
+    };
+    
+    pc.onconnectionstatechange = () => {
+        window.webkit.messageHandlers.native.postMessage({
+            type: 'connectionState',
+            state: pc.connectionState
+        });
     };
     
     pc.oniceconnectionstatechange = () => {

@@ -180,14 +180,15 @@ jobs:
 
       - name: Zip app bundle
         run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
           cd DerivedData/Build/Products/Release
-          ditto -c -k --keepParent NotchBuddy.app NotchBuddy.zip
+          ditto -c -k --keepParent NotchBuddy.app "Coucou-walkie-test-${SHORT_SHA}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NotchBuddy-walkie-test
-          path: DerivedData/Build/Products/Release/NotchBuddy.zip
+          name: Coucou-walkie-test-${{ github.sha }}
+          path: DerivedData/Build/Products/Release/Coucou-walkie-test-*.zip
 
       - name: Create prerelease
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/cursor/walkie-talkie-voice-client-')
@@ -196,13 +197,14 @@ jobs:
         run: |
           SHORT_SHA=$(git rev-parse --short HEAD)
           TAG_NAME="walkie-test-${SHORT_SHA}"
+          ZIP_NAME="Coucou-walkie-test-${SHORT_SHA}.zip"
           
           # Create release notes
           cat > /tmp/release-notes.md <<EOF
           # Walkie-Talkie Test Build
           
           **⚠️ Unsigned App - First Launch Instructions:**
-          1. Download \`NotchBuddy.zip\`
+          1. Download \`${ZIP_NAME}\`
           2. Extract the app
           3. Right-click on NotchBuddy.app and select "Open"
           4. Click "Open" in the security dialog
@@ -210,6 +212,8 @@ jobs:
           Built from commit ${GITHUB_SHA} on branch ${GITHUB_REF_NAME}
           
           This is an ad-hoc signed test build for walkie-talkie feature testing.
+          
+          **Release URL:** https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG_NAME}
           EOF
           
           # Delete tag if it exists
@@ -217,8 +221,11 @@ jobs:
           git push origin ":refs/tags/$TAG_NAME" 2>/dev/null || true
           
           # Create new prerelease
-          gh release create "$TAG_NAME" \
-            DerivedData/Build/Products/Release/NotchBuddy.zip \
+          RELEASE_URL=$(gh release create "$TAG_NAME" \
+            "DerivedData/Build/Products/Release/${ZIP_NAME}" \
             --title "Walkie Test ${SHORT_SHA}" \
             --notes-file /tmp/release-notes.md \
-            --prerelease
+            --prerelease \
+            --json url -q .url)
+          
+          echo "::notice title=Release Created::${RELEASE_URL}"

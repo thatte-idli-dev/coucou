@@ -68,7 +68,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             do {
                 try await wv.callAsyncJavaScript("setMicEnabled(enabled)", arguments: ["enabled": enabled], contentWorld: .page)
             } catch {
-                logger.error("setMicEnabled failed: \(error.localizedDescription)")
+                logger.error("setMicEnabled failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -88,7 +88,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             }
             return answer
         } catch {
-            logger.error("handleOffer failed: \(error.localizedDescription)")
+            logger.error("handleOffer failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
     }
@@ -108,7 +108,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             }
             return offer
         } catch {
-            logger.error("createOffer failed: \(error.localizedDescription)")
+            logger.error("createOffer failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
     }
@@ -123,7 +123,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
                     contentWorld: .page
                 )
             } catch {
-                logger.error("handleAnswer failed: \(error.localizedDescription)")
+                logger.error("handleAnswer failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -138,7 +138,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
                     contentWorld: .page
                 )
             } catch {
-                logger.error("addIceCandidate failed: \(error.localizedDescription)")
+                logger.error("addIceCandidate failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -149,7 +149,7 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             do {
                 try await wv.callAsyncJavaScript("cleanup()", arguments: [:], contentWorld: .page)
             } catch {
-                logger.error("cleanup failed: \(error.localizedDescription)")
+                logger.error("cleanup failed: \(error.localizedDescription, privacy: .public)")
             }
         }
         
@@ -181,13 +181,14 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
         let errorMessage = dict["message"] as? String
         let iceState = dict["state"] as? String
         let candidateType = dict["candidateType"] as? String
+        let connectionState = dict["state"] as? String
         
         Task { @MainActor in
-            self.handleMessage(type: type, candidate: candidate, answer: answer, errorMessage: errorMessage, iceState: iceState, candidateType: candidateType)
+            self.handleMessage(type: type, candidate: candidate, answer: answer, errorMessage: errorMessage, iceState: iceState, candidateType: candidateType, connectionState: connectionState)
         }
     }
     
-    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?, iceState: String?, candidateType: String?) {
+    private func handleMessage(type: String, candidate: String?, answer: String?, errorMessage: String?, iceState: String?, candidateType: String?, connectionState: String?) {
         switch type {
         case "ice":
             if let candidate = candidate {
@@ -199,15 +200,23 @@ final class WalkieTalkieAudioImpl: NSObject, WalkieAudioLayer, WKUIDelegate, WKS
             }
         case "error":
             if let errorMessage = errorMessage {
-                logger.error("WebRTC JS error: \(errorMessage)")
+                logger.error("WebRTC JS error: \(errorMessage, privacy: .public)")
+            }
+        case "consoleError":
+            if let errorMessage = errorMessage {
+                logger.error("JS console.error: \(errorMessage, privacy: .public)")
             }
         case "iceState":
             if let iceState = iceState {
-                logger.info("ICE connection state: \(iceState)")
+                logger.info("ICE connection state: \(iceState, privacy: .public)")
+            }
+        case "connectionState":
+            if let connectionState = connectionState {
+                logger.info("Connection state: \(connectionState, privacy: .public)")
             }
         case "candidatePair":
             if let candidateType = candidateType {
-                logger.info("Selected candidate pair type: \(candidateType)")
+                logger.info("Selected candidate pair type: \(candidateType, privacy: .public)")
             }
         default:
             break

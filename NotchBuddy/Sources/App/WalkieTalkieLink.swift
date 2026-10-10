@@ -38,7 +38,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private var state: WalkieState = .disconnected {
         didSet {
             if state != oldValue {
-                logger.info("State: \(String(describing: oldValue)) → \(String(describing: state))")
+                logger.info("State: \(String(describing: oldValue), privacy: .public) → \(String(describing: state), privacy: .public)")
             }
         }
     }
@@ -166,25 +166,25 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     
                     if let httpResp = response as? HTTPURLResponse {
                         if httpResp.statusCode == 409 {
-                            logger.error("SSE: Channel full (409)")
+                            logger.error("SSE: Channel full (409)", privacy: .public)
                             channelFull = true
                             await disconnect()
                             return
                         }
                         
                         if httpResp.statusCode == 401 {
-                            logger.error("SSE: Authentication failed (401)")
+                            logger.error("SSE: Authentication failed (401)", privacy: .public)
                             await disconnect()
                             return
                         }
                         
                         guard httpResp.statusCode == 200 else {
-                            logger.warning("SSE: HTTP \(httpResp.statusCode), will retry")
+                            logger.warning("SSE: HTTP \(httpResp.statusCode, privacy: .public), will retry")
                             try? await Task.sleep(for: .seconds(reconnectBackoff()))
                             continue
                         }
                         
-                        logger.info("SSE: Connected (200)")
+                        logger.info("SSE: Connected (200)", privacy: .public)
                     }
                     
                     reconnectAttempts = 0
@@ -198,13 +198,13 @@ final class WalkieTalkieLink: @unchecked Sendable {
                     
                     // Stream ended, reset and reconnect
                     if !Task.isCancelled {
-                        logger.warning("SSE stream ended, reconnecting...")
+                        logger.warning("SSE stream ended, reconnecting...", privacy: .public)
                         await reconnect()
                         try? await Task.sleep(for: .seconds(reconnectBackoff()))
                     }
                 } catch {
                     if Task.isCancelled { break }
-                    logger.error("SSE error: \(error.localizedDescription)")
+                    logger.error("SSE error: \(error.localizedDescription, privacy: .public)")
                     try? await Task.sleep(for: .seconds(reconnectBackoff()))
                 }
             }
@@ -224,7 +224,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(35))
                 if Date().timeIntervalSince(lastEventTime) > 35 {
-                    logger.warning("Stream dead for 35s, reconnecting...")
+                    logger.warning("Stream dead for 35s, reconnecting...", privacy: .public)
                     await reconnect()
                 }
             }
@@ -232,7 +232,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     }
     
     private func reconnect() async {
-        logger.info("Reconnecting...")
+        logger.info("Reconnecting...", privacy: .public)
         
         // Reset state per protocol rules
         let wasConnected = state != .disconnected
@@ -379,22 +379,22 @@ final class WalkieTalkieLink: @unchecked Sendable {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = jsonData
         
-        logger.info("Presence: rev=\(revision) tuned=\(tuned) transmitting=\(transmitting)")
+        logger.info("Presence: rev=\(revision, privacy: .public) tuned=\(tuned, privacy: .public) transmitting=\(transmitting, privacy: .public)")
         
         do {
             let (_, response) = try await URLSession.shared.data(for: req)
             if let httpResp = response as? HTTPURLResponse {
                 if httpResp.statusCode == 200 {
-                    logger.debug("Presence: HTTP 200")
+                    logger.debug("Presence: HTTP 200", privacy: .public)
                 } else if httpResp.statusCode == 401 || httpResp.statusCode == 409 {
-                    logger.error("Presence: HTTP \(httpResp.statusCode), reconnecting...")
+                    logger.error("Presence: HTTP \(httpResp.statusCode, privacy: .public), reconnecting...")
                     await reconnect()
                 } else {
-                    logger.warning("Presence: HTTP \(httpResp.statusCode)")
+                    logger.warning("Presence: HTTP \(httpResp.statusCode, privacy: .public)")
                 }
             }
         } catch {
-            logger.error("Presence: error \(error.localizedDescription)")
+            logger.error("Presence: error \(error.localizedDescription, privacy: .public)")
         }
     }
     
@@ -408,7 +408,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         }
         
         let hasPermission = await audioLayer.checkMicPermission()
-        logger.info("Mic permission check: \(hasPermission ? "granted" : "denied")")
+        logger.info("Mic permission check: \(hasPermission ? "granted" : "denied", privacy: .public)")
         guard hasPermission else {
             await showMicPermissionAlert()
             return
@@ -439,7 +439,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 let offer = try await audioLayer.createOffer(iceServers: iceServers)
                 await sendOffer(offer)
             } catch {
-                logger.error("createOffer failed: \(error.localizedDescription)")
+                logger.error("createOffer failed: \(error.localizedDescription, privacy: .public)")
             }
         }
         
@@ -464,7 +464,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
         guard let signalEvent = WalkieProtocol.parseSignalEvent(dict) else { return }
         guard signalEvent.from != sessionID else { return }
         
-        logger.info("Signal received: kind=\(signalEvent.kind)")
+        logger.info("Signal received: kind=\(signalEvent.kind, privacy: .public)")
         
         let payload = signalEvent.payload
         
@@ -501,7 +501,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 await stopWaitingAnimation()
                 NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
             } catch {
-                logger.error("handleOffer failed: \(error.localizedDescription)")
+                logger.error("handleOffer failed: \(error.localizedDescription, privacy: .public)")
             }
         }
         
@@ -539,7 +539,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func sendSignal(kind: String, payload: [String: String]) async {
         guard let serverURL, let sessionToken, let sessionID, let negotiationID else { return }
         
-        logger.info("Signal sending: kind=\(kind)")
+        logger.info("Signal sending: kind=\(kind, privacy: .public)")
         
         let body = WalkieProtocol.buildSignalBody(
             sessionID: sessionID,
@@ -574,7 +574,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
         case .connected(tuned: false):
             let hasPermission = await audioLayer.checkMicPermission()
-            logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied")")
+            logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied", privacy: .public)")
             guard hasPermission else {
                 await showMicPermissionAlert()
                 return
@@ -641,7 +641,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
             
         case .connected(tuned: false):
             let hasPermission = await audioLayer.checkMicPermission()
-            logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied")")
+            logger.info("Mic permission check (gesture): \(hasPermission ? "granted" : "denied", privacy: .public)")
             guard hasPermission else {
                 await showMicPermissionAlert()
                 return
@@ -801,7 +801,7 @@ final class WalkieTalkieLink: @unchecked Sendable {
                 }
             }
         } catch {
-            logger.error("fetchICEServers failed: \(error.localizedDescription)")
+            logger.error("fetchICEServers failed: \(error.localizedDescription, privacy: .public)")
         }
     }
     
