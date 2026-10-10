@@ -162,7 +162,13 @@ jobs:
 
       - name: Ad-hoc codesign with mic entitlement
         run: |
-          APP_PATH="DerivedData/Build/Products/Release/NotchBuddy.app"
+          # Find the built app (CODE_SIGNING_ALLOWED=NO puts it in a different location)
+          APP_PATH=$(find DerivedData/Build/Products -name "NotchBuddy.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: NotchBuddy.app not found"
+            exit 1
+          fi
+          echo "Found app at: $APP_PATH"
           
           # Create temporary entitlements file
           cat > /tmp/entitlements.plist <<EOF
@@ -181,6 +187,10 @@ jobs:
           
           # Verify signature
           codesign --verify --deep --strict "$APP_PATH"
+          
+          # Copy to expected location for zipping
+          mkdir -p DerivedData/Build/Products/Release
+          cp -R "$APP_PATH" DerivedData/Build/Products/Release/
 
       - name: Zip app bundle
         run: |
