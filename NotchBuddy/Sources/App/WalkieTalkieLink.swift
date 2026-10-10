@@ -683,12 +683,17 @@ final class WalkieTalkieLink: @unchecked Sendable {
     private func handlePTTUp() async {
         switch state {
         case .waiting:
+            // Release PTT while waiting → untune
+            waitingTimer?.cancel()
+            waitingTimer = nil
+            await stopWaitingAnimation()
             await audioLayer.setMicEnabled(false)
-            
-        case .inCall(mode: .pushToTalk):
-            state = .inCall(mode: .pushToTalk(transmitting: false))
-            await audioLayer.setMicEnabled(false)
+            state = .connected(tuned: false)
             await sendPresence()
+            
+        case .inCall:
+            // Release PTT during call → hang up and untune
+            await endCall()
             
         default:
             break
