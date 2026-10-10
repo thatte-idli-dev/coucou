@@ -10,15 +10,29 @@ import WebKit
 @MainActor
 @main
 struct WebKitBridgeTest {
+    static var didTimeout = false
+    
     static func main() async {
         print("🧪 WebKit Bridge Test")
         print("=====================\n")
         
+        // Hard timeout: 60 seconds
+        Task {
+            try? await Task.sleep(for: .seconds(60))
+            if !didTimeout {
+                didTimeout = true
+                print("\n❌ Test timed out after 60 seconds")
+                exit(1)
+            }
+        }
+        
         do {
             try await testOfferAnswerFlow()
+            didTimeout = true
             print("\n✅ WebKit bridge test passed!")
             exit(0)
         } catch {
+            didTimeout = true
             print("\n❌ WebKit bridge test failed: \(error)")
             exit(1)
         }
@@ -32,10 +46,21 @@ struct WebKitBridgeTest {
         let delegate = NavigationDelegate()
         let webViewA = await createWebView(delegate: delegate)
         let webViewB = await createWebView(delegate: delegate)
+        delegate.webViewA = webViewA
+        delegate.webViewB = webViewB
         
-        // Wait for pages to load completely
+        // Wait for pages to load and delegate to confirm
         print("⏳ Waiting for pages to load...")
-        try await Task.sleep(for: .seconds(2))
+        var attempts = 0
+        while !delegate.aLoaded || !delegate.bLoaded {
+            if attempts > 40 {
+                throw TestError("Pages did not load after 20 seconds (aLoaded=\(delegate.aLoaded), bLoaded=\(delegate.bLoaded))")
+            }
+            // Run the runloop briefly to allow WebKit callbacks
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            try await Task.sleep(for: .milliseconds(400))
+            attempts += 1
+        }
         
         print("✓ Web views created and loaded\n")
         
@@ -50,11 +75,13 @@ struct WebKitBridgeTest {
         // Create offer on peer A
         let offer: String
         do {
-            let result = try await webViewA.callAsyncJavaScript(
-                "return await createOffer(iceServers)",
-                arguments: ["iceServers": iceServers],
-                contentWorld: .page
-            )
+            let result = try await withRunLoop {
+                try await webViewA.callAsyncJavaScript(
+                    "return await createOffer(iceServers)",
+                    arguments: ["iceServers": iceServers],
+                    contentWorld: .page
+                )
+            }
             
             guard let offerStr = result as? String, !offerStr.isEmpty else {
                 throw TestError("createOffer returned empty or invalid result: \(String(describing: result))")
@@ -85,11 +112,13 @@ struct WebKitBridgeTest {
         // Handle offer on peer B and get answer
         let answer: String
         do {
-            let result = try await webViewB.callAsyncJavaScript(
-                "return await handleOffer(offerJSON, iceServers)",
-                arguments: ["offerJSON": offer, "iceServers": iceServers],
-                contentWorld: .page
-            )
+            let result = try await withRunLoop {
+                try await webViewB.callAsyncJavaScript(
+                    "return await handleOffer(offerJSON, iceServers)",
+                    arguments: ["offerJSON": offer, "iceServers": iceServers],
+                    contentWorld: .page
+                )
+            }
             
             guard let answerStr = result as? String, !answerStr.isEmpty else {
                 throw TestError("handleOffer returned empty or invalid result: \(String(describing: result))")
@@ -119,11 +148,13 @@ struct WebKitBridgeTest {
         
         // Handle answer on peer A
         do {
-            try await webViewA.callAsyncJavaScript(
-                "return await handleAnswer(answerJSON)",
-                arguments: ["answerJSON": answer],
-                contentWorld: .page
-            )
+            _ = try await withRunLoop {
+                try await webViewA.callAsyncJavaScript(
+                    "return await handleAnswer(answerJSON)",
+                    arguments: ["answerJSON": answer],
+                    contentWorld: .page
+                )
+            }
             
             print("✓ Peer A handled answer\n")
             
@@ -275,14 +306,51 @@ struct WebKitBridgeTest {
     }
 }
 
+// Helper to pump the runloop while waiting for async operations
+// Required for WKWebView to function in a CLI context
+func withRunLoop<T>(_ operation: @escaping () async throws -> T) async rethrows -> T {
+    return try await withCheckedThrowingContinuation { continuation in
+        Task { @MainActor in
+            do {
+                let result = try await operation()
+                continuation.resume(returning: result)
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+        
+        // Pump the runloop while waiting
+        Task {
+            while !Task.isCancelled {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+    }
+}
+
 @MainActor
 class NavigationDelegate: NSObject, WKNavigationDelegate {
+    var aLoaded = false
+    var bLoaded = false
+    weak var webViewA: WKWebView?
+    weak var webViewB: WKWebView?
+    
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        // Page loaded
+        print("✓ Page loaded for webView \(webView === webViewA ? "A" : "B")")
+        if webView === webViewA {
+            aLoaded = true
+        } else if webView === webViewB {
+            bLoaded = true
+        }
     }
     
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        print("Navigation failed: \(error)")
+        print("❌ Navigation failed: \(error)")
+    }
+    
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        print("❌ Provisional navigation failed: \(error)")
     }
 }
 

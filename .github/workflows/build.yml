@@ -85,6 +85,7 @@ jobs:
         run: bash scripts/test-walkie-talkie-protocol.sh
 
       - name: Walkie-talkie WebKit bridge test
+        timeout-minutes: 3
         run: bash scripts/test-webkit-bridge.sh
 
       - name: Install Go
